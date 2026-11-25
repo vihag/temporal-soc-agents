@@ -50,21 +50,21 @@ Canonical copy: [`CHECKLIST_MAPPING.md`](CHECKLIST_MAPPING.md). Kept here so the
 | B2 | 10–15 min app-dev / distributed-systems Q&A | Short prepared answers | Leave time | `DEMO.md` | must |
 | B3 | Candidate Q&A | Two or three questions | Ask one | `DEMO.md` | nice |
 | **C. Capabilities** | | | | | |
-| C1 | Durable execution / crash recovery | One parent Workflow; completed Activities are not re-run | Kill worker mid-Evidence loop, restart | Temporal UI; `tests/test_replay.py` | must |
+| C1 | Durable execution / crash recovery | One parent Workflow; completed Activities are not re-run | Kill worker mid-Evidence loop, restart | Temporal UI; `tests/test_workflow.py::test_replay_is_deterministic`, `::test_worker_restart_resumes_without_rerunning_activities` | must |
 | C2 | Retries and timeouts | Per-Activity policy; `LLMClient(max_retries=0)` | Fixture 500; show retries in the drawer | `llm.py`, `activities.py` | must |
 | C3 | Exactly-once side effects | `case-{alert_id}` + `soar-submit-{alert_id}` + Mock SOAR unique on `case_id` | Duplicate start; timeout-after-success, one ticket | `soar.py` | must |
 | C4 | Query / Update HITL | Query `get_case`; Update `decide`; `wait_condition` | Approve in the UI | `workflow.py` | must |
-| C5 | Timers / escalation | 2-minute demo timer → `ESCALATED`, late decide still works | Time-skipping test | `tests/test_approval_timeout.py` | must |
+| C5 | Timers / escalation | 2-minute demo timer → `ESCALATED`, late decide still works | Time-skipping test | `tests/test_simulations.py::test_simulation[approval_timeout_escalated]` | must |
 | C6 | Parallelism, no child Workflows | `asyncio.gather` of Evidence and Threat in the parent | Overlapping Activities in one history | `workflow.py` | should |
 | C7 | Determinism / versioning | No I/O in Workflow or `Agent.run`; `patched` only if needed | Point at those two files | `workflow.py`, `agents.py` | should |
 | C8 | Temporal UI + our drawers | Activity I/O in Cloud UI; "What Temporal did here" drawer in the case app | Open the triage drawer, then the Cloud link | UI; namespace `quickstart-vihaggupta.om7xm` | must |
-| C9 | Time-skipping tests | `WorkflowEnvironment.start_time_skipping()` | `pytest tests/test_approval_timeout.py` | that test | must |
+| C9 | Time-skipping tests | `WorkflowEnvironment.start_time_skipping()` | `pytest -k approval_timeout` | that test | must |
 | C10 | One task queue | `soc-case`. A `soc-llm` split is talk-only | Show the worker container | `worker.py` | should |
 | C11 | Cloud vs local | `ClientConfig`; profile `cloud-setup` or local compose | Same app, different profile | `README.md` | must |
 | **D. AI pillars** | | | | | |
 | D1 | Workflows-as-code | One Workflow orchestrates Grok, tools, notify, SOAR | Trace `run()` end to end | `workflow.py` | must |
 | D2 | Durable AI sessions | Wait survives a down worker | Stop worker after notify, approve later | C1 + C5 | must |
-| D3 | Happy path only — no `state.py` table | Status is derived from `run()` | `state.py` next to `run()` | §4 | must |
+| D3 | Happy path only — no `state.py` table | Status set only by `_enter()` in `run()` | `state.py` next to `run()` | §4 | must |
 | D4 | Approve agent decisions | SOAR only after `decide(approve)` | Reject, re-investigate, approve | Update `decide` | must |
 | D5 | Self-heal LLM + rate limits | Capped retries; 429 → Retry-After; other 4xx → `NEEDS_REVIEW` | Bad JSON twice, then success | `llm.py` | must |
 | D6 | Parallel agents | Two Agent subclasses, one Workflow | One case, overlapping tool calls | `agents.py` | should |
