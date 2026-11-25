@@ -1,98 +1,60 @@
 # temporal-soc-agents
 
-A lean Temporal Python SDK app that runs a SOC case investigation as durable AI agents: triage, an Evidence loop (optional parallel Threat), a disposition, a human approve/reject gate, and an exactly-once SOAR submit.
+A lean Temporal Python SDK app that runs a SOC case investigation as durable AI agents: triage, an Evidence loop and a parallel Threat loop, a disposition, a human approve/reject gate with escalation, and an exactly-once SOAR submit.
 
-This README is the quickstart. Then read [CODE_TOUR.md](CODE_TOUR.md) (15-minute walk through the code) and [DEMO.md](DEMO.md) (interview script). The design, diagrams, cost cap, and FORGE plan are in [DESIGN.md](DESIGN.md).
+This README is the quickstart. Then read [CODE_TOUR.md](CODE_TOUR.md) (a 15-minute walk through the code) and [DEMO.md](DEMO.md) (the interview script). Design, diagrams, cost cap and build plan are in [DESIGN.md](DESIGN.md).
 
-## Run it now (T1: CLI + self-driving simulations, fixture mode, no API key)
+Everything runs in **fixture mode** by default: recorded model replies, mock Splunk and SOAR, no API key, no spend.
 
-```bash
-temporal server start-dev                      # terminal 1 (UI on http://localhost:8233)
-uv sync                                        # or: pip install -e . pytest pytest-asyncio
-uv run python -m soc simulate --all            # terminal 2: five narrated end-to-end scenarios
-uv run pytest -q                               # same scenarios on a time-skipping test server
-```
-
-`simulate` runs its own worker and starts Mock Splunk / Mock SOAR in-process if they are not running, so `start-dev` is the only other thing that needs to be up. Scenarios: `auto_resolve`, `approve_to_submitted`, `reject_then_reinvestigate`, `approval_timeout_escalated`, `activity_failure_retry`. To run one: `uv run python -m soc simulate activity_failure_retry`.
-
-Drive a case by hand (and rehearse killing the worker mid-case):
+## Quickstart (Docker Compose)
 
 ```bash
-uv run python -m services.mock_splunk          # terminal 2
-uv run python -m services.mock_soar            # terminal 3
-uv run python -m soc worker                    # terminal 4 (Ctrl-C it any time, start it again)
-uv run python -m soc start --scenario hitl-confirm-01
-uv run python -m soc view case-SPL-2026-0001
-uv run python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "Evidence matches the alert"
-```
-
-The sections below describe the full app once the UI and Compose land (T3).
-
-## What you need
-
-- Docker, or Python 3.11+ and the [Temporal CLI](https://docs.temporal.io/cli) for the fallback
-- Optional: an xAI API key for a live Grok call. **Tests and CI never need one.**
-
-## Quickstart (Compose)
-
-```bash
-cp .env.example .env          # leave GROK_CLIENT=fixture unless you have a key
+cp .env.example .env
 docker compose up --build
 ```
 
-- Case UI: http://127.0.0.1:8080
-- Temporal UI: http://127.0.0.1:8233
+- Case console: http://localhost:8080 (the **Cases** tab, and the **Self demo** tab)
+- Temporal UI: http://localhost:8233
 
-Start a collaborative case from the UI, or:
+Self demo straight from a link: http://localhost:8080/#demo=activity_failure_retry. Crash demo: `docker compose kill worker`, then `docker compose start worker`.
+
+## Quickstart (no Docker)
 
 ```bash
-docker compose exec analyst-api python -m soc start --scenario hitl-confirm-01
+temporal server start-dev                       # terminal 1, Temporal UI on :8233
+uv sync                                         # or: pip install -e . pytest pytest-asyncio
+uv run python -m soc api --with-worker          # terminal 2, console on :8080 (worker + mocks in-process)
 ```
 
-Open the case, wait for a proposed disposition, Approve or Reject. Click **What Temporal did here** on a timeline step for the Activity history, retries, and LLM I/O, with a link to the Temporal UI.
+Or run the five narrated scenarios in the terminal, and the tests:
 
 ```bash
-docker compose exec analyst-api pytest
+uv run python -m soc simulate --all             # auto_resolve, approve_to_submitted, reject_then_reinvestigate,
+                                                # approval_timeout_escalated, activity_failure_retry
+uv run pytest -q                                # same scenarios on a time-skipping test server
+```
+
+Drive a case by hand, with each process separate (so you can kill the worker mid-case):
+
+```bash
+uv run python -m services.mock_splunk           # :8001
+uv run python -m services.mock_soar             # :8002
+uv run python -m soc worker                     # Ctrl-C it any time, start it again
+uv run python -m soc start --scenario hitl-confirm-01
+uv run python -m soc view case-SPL-2026-0001
+uv run python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "Evidence matches the alert"
 ```
 
 ## Live Grok (optional)
 
-In `.env`:
-
-```bash
-GROK_CLIENT=http
-XAI_API_KEY=...
-XAI_MODEL=grok-4.3
-```
-
-Then recreate the worker. Default is `reasoning_effort=none` and `LLM_MAX_TOKENS=800`; see DESIGN.md §11 for the $50 spend cap. `uv run python -m soc grok-smoke` makes one live call, or exits 2 if `XAI_API_KEY` is unset.
+In `.env`, set `GROK_CLIENT=http` and `XAI_API_KEY=...` (model `grok-4.3`, `reasoning_effort=none`, `LLM_MAX_TOKENS=800`). Then restart the worker. `uv run python -m soc grok-smoke` makes one live call, or exits 2 without a key. Tests and CI never call Grok. The spend cap is in DESIGN.md §11.
 
 ## Temporal Cloud
 
-The same Compose stack can point at Cloud instead of the local Temporal service:
+Connection uses Temporal's standard env config, so the same code runs on Cloud. Set `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE` and `TEMPORAL_API_KEY` (or `TEMPORAL_PROFILE=<profile>` with a `temporal.toml`). Set `TEMPORAL_UI_URL=https://cloud.temporal.io` so the console's links open Cloud. With Compose, run everything except `temporal`:
 
 ```bash
-export TEMPORAL_PROFILE=cloud-setup   # namespace quickstart-vihaggupta.om7xm
-# start only worker, analyst-api, mock-splunk, mock-soar
 docker compose up --build worker analyst-api mock-splunk mock-soar
 ```
 
-Connection uses `temporalio.envconfig.ClientConfig`. Do not put API keys in git.
-
-## Without Docker (fallback)
-
-```bash
-temporal server start-dev      # terminal 1, UI on :8233
-uv sync
-uv run python -m soc worker    # terminal 2
-uv run python -m soc api       # terminal 3, UI on :8080
-uv run python -m soc start --scenario hitl-confirm-01
-uv run python -m soc view case-SPL-2026-0001
-uv run python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "Evidence matches the alert"
-```
-
-Mock Splunk and Mock SOAR need to be started the same way the Makefile will document (`python -m services.mock_splunk` and `python -m services.mock_soar`), or use Compose.
-
-## Layout
-
-See DESIGN.md §5 for the file tree and LOC budget. The six files to read first are listed in CODE_TOUR.md.
+Never commit API keys; `.env` is git-ignored.

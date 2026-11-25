@@ -26,6 +26,7 @@ class Settings:
     xai_base_url: str = "https://api.x.ai/v1"
     xai_model: str = "grok-4.3"
     llm_max_tokens: int = 800
+    fixture_latency_s: float = 0.0  # fake model "thinking" time, so the UI demo is watchable
     fixtures_dir: Path = REPO_ROOT / "fixtures" / "scenarios"
 
     @classmethod
@@ -43,6 +44,7 @@ class Settings:
             xai_base_url=env("XAI_BASE_URL", cls.xai_base_url),
             xai_model=env("XAI_MODEL", cls.xai_model),
             llm_max_tokens=int(env("LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
+            fixture_latency_s=float(env("FIXTURE_LATENCY_S", "0")),
             fixtures_dir=Path(env("FIXTURES_DIR", str(cls.fixtures_dir))),
         )
 

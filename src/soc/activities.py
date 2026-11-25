@@ -114,7 +114,7 @@ def _policy(timeout_s: int, attempts: int) -> dict[str, Any]:
 # Timeouts and retries for each Activity, in one table (DESIGN.md 6.4).
 OPTIONS: dict[str, dict[str, Any]] = {
     "fetch_alert": _policy(10, 3),
-    "llm_create": _policy(45, 5),
+    "llm_create": _policy(30, 5),
     "run_tool": _policy(15, 3),
     "notify": _policy(10, 3),
     "soar_submit": _policy(15, 5),

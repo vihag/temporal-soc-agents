@@ -3,6 +3,7 @@ retryable, recorded step in Workflow history."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
 from typing import Any
@@ -30,6 +31,7 @@ class FixtureLLMClient(LLMClient):
         self.settings = settings
 
     async def complete(self, request: LLMRequest) -> LLMReply:
+        await asyncio.sleep(self.settings.fixture_latency_s)
         turn = Scenario.load(request.scenario, self.settings.fixtures_dir).model_turn(
             request.agent, request.step
         )

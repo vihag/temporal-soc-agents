@@ -1,6 +1,7 @@
 """Command line: run the worker, drive a case by hand, or run the self-driving simulations.
 
     python -m soc worker
+    python -m soc api --with-worker   # UI on :8080 (+ worker and mocks in-process)
     python -m soc start --scenario hitl-confirm-01
     python -m soc view case-SPL-2026-0001
     python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "matches"
@@ -116,6 +117,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("worker")
     sub.add_parser("grok-smoke")
+    sub.add_parser("api").add_argument("--with-worker", action="store_true")
     sub.add_parser("start").add_argument("--scenario", default="hitl-confirm-01")
     sub.add_parser("view").add_argument("workflow_id")
     d = sub.add_parser("decide")
@@ -139,6 +141,10 @@ def main() -> None:
             asyncio.run(view(args.workflow_id))
         case "decide":
             asyncio.run(decide(args.workflow_id, args.decision, args.analyst, args.rationale))
+        case "api":
+            from soc.api import serve
+
+            serve(args.with_worker)
         case "grok-smoke":
             raise SystemExit(asyncio.run(grok_smoke()))
         case "simulate":
