@@ -1,0 +1,16 @@
+stateDiagram-v2
+  [*] --> NEW: start CaseInvestigationWorkflow
+  NEW --> TRIAGED: TriageAgent
+  TRIAGED --> AUTO_RESOLVED: autonomous policy gates pass
+  TRIAGED --> NEEDS_REVIEW: invalid model or route review
+  TRIAGED --> INVESTIGATING: collaborative
+  INVESTIGATING --> DISPOSITION_PROPOSED: DispositionAgent
+  DISPOSITION_PROPOSED --> APPROVED: Update decide approve
+  DISPOSITION_PROPOSED --> REJECTED: Update decide reject
+  DISPOSITION_PROPOSED --> ESCALATED: 2-minute timer fires
+  REJECTED --> INVESTIGATING: re-investigate
+  ESCALATED --> APPROVED: late approve
+  ESCALATED --> REJECTED: late reject
+  APPROVED --> SUBMITTED: idempotent soar_submit
+  AUTO_RESOLVED --> [*]
+  SUBMITTED --> [*]

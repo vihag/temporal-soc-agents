@@ -1,0 +1,20 @@
+flowchart LR
+  subgraph clients [Analyst]
+    UI[Case UI]
+    CLI[CLI]
+  end
+  subgraph compose [docker compose]
+    API[analyst-api]
+    Worker[temporal-worker]
+    Temporal[Temporal dev server]
+    Splunk[mock-splunk]
+    Soar[mock-soar]
+  end
+  Grok[xAI Grok when a key is set]
+  UI --> API
+  CLI --> API
+  API --> Temporal
+  Worker --> Temporal
+  Worker --> Splunk
+  Worker --> Soar
+  Worker -.-> Grok

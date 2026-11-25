@@ -1,0 +1,27 @@
+flowchart TD
+  subgraph durable [Durable execution]
+    Kill[Kill worker mid-Evidence loop]
+    Kill --> Restart[Worker restarts]
+    Restart --> Replay[Replay history]
+    Replay --> Resume[Resume next LLM or tool activity]
+  end
+  subgraph llm [LLM self-heal]
+    Call[llm_create]
+    Call --> Bad[Invalid JSON or schema]
+    Call --> Rate[429 with Retry-After]
+    Call --> Hard[Other 4xx]
+    Call --> Ok[Valid structured output]
+    Bad --> RetryLlm[Temporal retry up to cap]
+    Rate --> Delay[Next attempt after Retry-After]
+    Delay --> Call
+    RetryLlm --> Call
+    Hard --> Review[Parent sets NEEDS_REVIEW]
+    Ok --> Continue[Workflow continues]
+  end
+  subgraph soar [Exactly-once SOAR]
+    Submit[soar_submit with idempotency key]
+    Submit --> Written[Mock SOAR writes ticket]
+    Written --> Timeout[Activity times out after success]
+    Timeout --> RetrySoar[Retry same key]
+    RetrySoar --> Same[Same soar_case_id, created false]
+  end

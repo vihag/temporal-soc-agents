@@ -1,0 +1,40 @@
+sequenceDiagram
+  participant CLI as CLI or UI
+  participant WF as CaseInvestigationWorkflow
+  participant Triage as TriageAgent
+  participant Ev as EvidenceAgent
+  participant Th as ThreatAgent
+  participant Disp as DispositionAgent
+  participant Analyst as Analyst
+  participant Soar as Mock SOAR
+
+  CLI->>WF: start id=case-alert_id
+  WF->>Triage: run - tool-call agent no loop
+  Triage-->>WF: verdict, severity, route
+  par Evidence loop in the same Workflow
+    loop until done or max 6 steps
+      Ev->>Ev: llm_create
+      Ev->>Ev: named tool activity
+    end
+    Ev-->>WF: evidence and findings
+  and Threat loop in the same Workflow
+    loop until done or max 6 steps
+      Th->>Th: llm_create
+      Th->>Th: named tool activity
+    end
+    Th-->>WF: threat findings
+  end
+  WF->>Disp: run - tool-call agent no loop
+  Disp-->>WF: proposed disposition
+  WF->>Analyst: notify
+  alt approved in time
+    Analyst->>WF: Update decide approve
+    WF->>Soar: soar_submit idempotency key
+    Soar-->>WF: soar_case_id
+  else rejected
+    Analyst->>WF: Update decide reject
+    WF->>Ev: re-investigate
+  else 2-minute timer fires
+    WF->>Analyst: notify escalation
+    Note over WF: status ESCALATED, still waiting
+  end
