@@ -1,0 +1,20 @@
+{
+  "alert": {
+    "alert_id": "SPL-2026-0101",
+    "title": "Encoded PowerShell from scheduled task",
+    "severity": "low",
+    "host": "it-mgmt-01",
+    "user": "svc_patch",
+    "raw": {"rule": "PS-ENCODED-CMD", "task": "\\IT\\NightlyPatchReport"}
+  },
+  "tools": {
+    "list_alert_evidence": {"ref": "EV-alert", "summary": "Signed IT patch-report script, runs nightly for 14 months"}
+  },
+  "llm": {
+    "triage": [
+      {"tool": "list_alert_evidence", "args": {}},
+      {"final": {"severity": "low", "verdict": "false_positive", "confidence": 0.93,
+                 "rationale": "Known, signed IT automation with a long clean history."}}
+    ]
+  }
+}

@@ -4,7 +4,28 @@ A lean Temporal Python SDK app that runs a SOC case investigation as durable AI 
 
 This README is the quickstart. Then read [CODE_TOUR.md](CODE_TOUR.md) (15-minute walk through the code) and [DEMO.md](DEMO.md) (interview script). The design, diagrams, cost cap, and FORGE plan are in [DESIGN.md](DESIGN.md).
 
-Intended public repo: `vihag/temporal-soc-agents`. Implementation has not landed yet; commands below are the contract for the running app once FORGE T3 is merged.
+## Run it now (T1: CLI + self-driving simulations, fixture mode, no API key)
+
+```bash
+temporal server start-dev                      # terminal 1 (UI on http://localhost:8233)
+uv sync                                        # or: pip install -e . pytest pytest-asyncio
+uv run python -m soc simulate --all            # terminal 2: five narrated end-to-end scenarios
+uv run pytest -q                               # same scenarios on a time-skipping test server
+```
+
+`simulate` runs its own worker and Mock SOAR in-process, so `start-dev` is the only other thing that needs to be running. Scenarios: `auto_resolve`, `approve_to_submitted`, `reject_then_reinvestigate`, `approval_timeout_escalated`, `activity_failure_retry`. To run one: `uv run python -m soc simulate activity_failure_retry`.
+
+Drive a case by hand (and rehearse killing the worker mid-case):
+
+```bash
+uv run python -m services.mock_soar            # terminal 2
+uv run python -m soc worker                    # terminal 3 (Ctrl-C it any time, start it again)
+uv run python -m soc start --scenario hitl-confirm-01
+uv run python -m soc view case-SPL-2026-0001
+uv run python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "Evidence matches the alert"
+```
+
+The sections below describe the full app once the UI and Compose land (T3).
 
 ## What you need
 

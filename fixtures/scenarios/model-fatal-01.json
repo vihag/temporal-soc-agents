@@ -1,0 +1,1 @@
+{"extends": "auto-fp-01", "alert": {"alert_id": "SPL-2026-0103"}, "faults": {"llm_create": "fatal"}}
