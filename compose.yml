@@ -1,0 +1,46 @@
+# One command: docker compose up --build   ->  case UI :8080, Temporal UI :8233
+# Each service is one small process, so the moving parts are visible: the Temporal server, the
+# worker (all Workflow + Activity code), the analyst API/UI (a stateless client), two mocks.
+x-app: &app
+  build: .
+  env_file: .env
+  environment: &env
+    TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}
+    SPLUNK_URL: http://mock-splunk:8001
+    SOAR_URL: http://mock-soar:8002
+    MOCK_HOST: 0.0.0.0
+
+services:
+  temporal:
+    image: temporalio/temporal:latest
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--ui-ip", "0.0.0.0", "--log-level", "error"]
+    ports: ["7233:7233", "8233:8233"]
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 3s
+      retries: 20
+
+  mock-splunk:
+    <<: *app
+    command: ["python", "-m", "services.mock_splunk"]
+
+  mock-soar:
+    <<: *app
+    command: ["python", "-m", "services.mock_soar"]
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "soc", "worker"]
+    depends_on:
+      temporal: {condition: service_healthy, required: false}
+    restart: unless-stopped  # `docker compose kill worker` + `start worker` is the crash demo
+
+  analyst-api:
+    <<: *app
+    command: ["python", "-m", "soc", "api"]
+    environment:
+      <<: *env
+      API_HOST: 0.0.0.0
+    ports: ["8080:8080"]
+    depends_on:
+      temporal: {condition: service_healthy, required: false}

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SOC Console · durable agents on Temporal</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0b0b14;--panel:#12121f;--panel2:#181829;--line:#2a2a40;--text:#e8e8f2;--dim:#9a9ab5;
+  --accent:#8b5cf6;--accent2:#a78bfa;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--blue:#60a5fa}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,sans-serif}
+code,pre,.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px}
+a{color:var(--accent2)}button,select{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent)}button.good{background:#065f46;border-color:var(--ok)}button.bad{background:#7f1d1d;border-color:var(--bad)}
+button:disabled{opacity:.4;cursor:default}
+header.top{display:flex;align-items:center;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{font-weight:700;letter-spacing:.3px}.brand span{color:var(--accent2)}
+.tabs button{background:none;border:none;color:var(--dim);padding:6px 10px}.tabs button.on{color:var(--text);border-bottom:2px solid var(--accent)}
+.grow{flex:1}.dim{color:var(--dim)}.small{font-size:12px}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:#2a2a40}
+.s-SUBMITTED,.s-AUTO_RESOLVED,.s-APPROVED{background:#064e3b;color:var(--ok)}.s-ESCALATED,.s-REJECTED,.s-NEEDS_REVIEW{background:#4c1d1d;color:var(--bad)}
+.s-DISPOSITION_PROPOSED{background:#4a3b0b;color:var(--warn)}.s-INVESTIGATING,.s-TRIAGED,.s-NEW{background:#1e2a4a;color:var(--blue)}
+main{display:none;height:calc(100vh - 57px)}main.on{display:flex}
+/* cases view */
+#queue{width:360px;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
+#queue .bar{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--line)}
+.qrow{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}.qrow:hover,.qrow.on{background:var(--panel2)}
+#detail{flex:1;overflow:auto;padding:20px 28px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.card h3{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
+.banner{border-color:var(--warn);display:flex;align-items:center;gap:12px}
+.tl{display:grid;grid-template-columns:72px 190px 1fr auto;gap:6px 12px;align-items:center}
+.why{font-size:12px;cursor:pointer;color:var(--accent2);white-space:nowrap}
+/* self demo */
+#demo{flex-direction:column}
+.dbar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+.steps{display:flex;gap:6px;align-items:center}.step{padding:5px 12px;border-radius:999px;border:1px solid var(--line);color:var(--dim);font-size:13px}
+.step.on{border-color:var(--accent);color:var(--text);background:#2e1f5e}.step.done{color:var(--ok);border-color:#065f46}
+.panes{display:flex;flex:1;min-height:0}
+#code{width:46%;overflow:auto;border-right:1px solid var(--line);background:#0d0d18}
+#code .ln{display:flex;white-space:pre}#code .ln i{width:44px;text-align:right;padding-right:12px;color:#55557a;font-style:normal;user-select:none}
+#code .ln.hot{background:#3b2a73;box-shadow:inset 3px 0 var(--accent2)}
+.ptitle{padding:10px 16px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);border-bottom:1px solid var(--line);position:sticky;top:0;background:inherit;z-index:1}
+#gantt{flex:1;overflow:auto;background:var(--panel)}
+.grow-row{display:grid;grid-template-columns:230px 1fr;align-items:center;border-bottom:1px solid #1d1d30;min-height:26px;cursor:pointer}
+.grow-row:hover{background:var(--panel2)}.glabel{padding:3px 12px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{position:relative;height:18px;margin-right:16px}
+.gb{position:absolute;top:2px;height:14px;border-radius:4px;min-width:3px}
+.k-workflow{background:var(--accent)}.k-activity{background:#10b981}.k-retry{background:repeating-linear-gradient(45deg,#ef4444 0 6px,#7f1d1d 6px 12px)}
+.k-failed{background:var(--bad)}.k-timer{background:var(--warn)}.k-update{background:#fff;width:8px!important;transform:rotate(45deg);height:8px;top:5px;border-radius:1px}
+.gb.live{animation:pulse 1s infinite}@keyframes pulse{50%{opacity:.55}}
+.legend{display:flex;gap:14px;padding:8px 16px;font-size:12px;color:var(--dim)}.legend b{display:inline-block;width:12px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* drawer (same pattern as the ClickHouse demo) */
+#scrim{position:fixed;inset:0;background:#0008;display:none;z-index:9}#scrim.on{display:block}
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(760px,62vw);background:#10101c;border-left:1px solid var(--line);z-index:10;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column}
+#drawer.on{transform:none}#drawer header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
+#dbody{overflow:auto;padding:16px 18px}#dbody pre{background:#0b0b14;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:340px}
+.x{background:none;border:none;font-size:22px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">SOC Console <span>· durable agents on Temporal</span></div>
+  <nav class="tabs"><button id="t-cases" class="on" onclick="tab('cases')">Cases</button><button id="t-demo" onclick="tab('demo')">Self demo</button></nav>
+  <div class="grow"></div><a id="tui" target="_blank">Temporal UI ↗</a>
+</header>
+
+<main id="cases" class="on">
+  <section id="queue">
+    <div class="bar"><select id="newScenario"></select><button class="primary" onclick="newCase()">New case</button></div>
+    <div id="qrows"></div>
+  </section>
+  <section id="detail"><p class="dim">Select a case, or start one.</p></section>
+</main>
+
+<main id="demo">
+  <div class="dbar">
+    <select id="sim" onchange="showStory()"></select>
+    <div class="steps"><span class="step" id="st1">1 · Workflow runs</span>→<span class="step" id="st2">2 · Something breaks</span>→<span class="step" id="st3">3 · It recovers</span></div>
+    <div class="grow dim small" id="story"></div>
+    <button id="pause" onclick="togglePause()" disabled>Pause</button><button class="primary" onclick="startDemo()">Start over</button>
+  </div>
+  <div class="panes">
+    <section id="code"><div class="ptitle">Your Workflow code · workflow.py</div><div id="src"></div></section>
+    <section id="gantt"><div class="ptitle">Temporal event timeline · live from the event history <span id="dstatus"></span></div>
+      <div class="legend"><span><b class="k-workflow"></b>workflow</span><span><b class="k-activity"></b>activity</span><span><b class="k-retry"></b>failed attempts → retry</span><span><b class="k-timer"></b>durable timer</span><span><b style="background:#fff"></b>Update (analyst)</span></div>
+      <div id="rows"><p class="dim" style="padding:0 16px">Pick a scenario and press Start over.</p></div></section>
+  </div>
+</main>
+
+<div id="scrim" onclick="closeDrawer()"></div>
+<aside id="drawer"><header><b id="dtitle"></b><button class="x" onclick="closeDrawer()">×</button></header><div id="dbody"></div></aside>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const j = v => esc(JSON.stringify(v, null, 2));
+const hhmmss = iso => new Date(iso).toLocaleTimeString([], {hour12:false});
+const api = async (path, opts) => { const r = await fetch(path, opts); if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json(); };
+const post = (path, body) => api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
+let META, SRC = {}, current = null, demoId = null, paused = false;
+
+/* ---------- shared: drawer ---------- */
+function openDrawer(t, h){ $('dtitle').textContent = t; $('dbody').innerHTML = h; $('drawer').classList.add('on'); $('scrim').classList.add('on'); }
+function closeDrawer(){ $('drawer').classList.remove('on'); $('scrim').classList.remove('on'); }
+document.addEventListener('keydown', e => e.key === 'Escape' && closeDrawer());
+const tuiLink = id => `<a target="_blank" href="${META.temporal_ui}/${encodeURIComponent(id)}">Open this Workflow in the Temporal UI ↗</a>`;
+
+function snippet(module, needle, before = 2, after = 10){
+  const lines = (SRC[module] || '').split('\n'); const i = lines.findIndex(l => l.includes(needle));
+  return i < 0 ? '' : `<pre>${esc(lines.slice(Math.max(0, i - before), i + after).join('\n'))}</pre><p class="dim small">${module}.py · line ${i + 1}</p>`;
+}
+const WHY = {
+  llm_create: 'The model call is an Activity: Temporal records its result, retries it on failure or on an invalid answer (self-healing), and never re-calls it on replay.',
+  run_tool: 'Each tool call the agent makes is its own Activity: retried with its own timeout, visible here, and skipped on replay once done.',
+  fetch_alert: 'Reading Splunk is I/O, so it is an Activity outside the deterministic Workflow sandbox.',
+  notify: 'Paging the analyst is an Activity; the Workflow then waits on a durable timer, not a thread.',
+  soar_submit: 'Exactly-once side effect: Temporal retries until SOAR answers; SOAR is unique on case_id, so a retry after a lost response returns the same ticket.',
+};
+function barDrawer(b, wfId){
+  let h = `<p>${esc(WHY[b.name] || {workflow:'One Workflow per alert. Its code below is the whole case lifecycle; history is the source of truth.',
+    timer:'workflow.wait_condition(timeout=…) became a durable server-side timer. No worker holds a thread while it waits.' + (b.fired ? ' It fired: the case escalated.' : ' The analyst answered first, so it was cancelled.'),
+    update:'The analyst decision arrived as an Update. Its validator ran first (analyst only, only while a proposal is pending), then it was recorded in history.',
+    }[b.kind] || '')}</p>`;
+  if (b.attempt > 1) h += `<p><b style="color:var(--bad)">${b.attempt - 1} failed attempt(s)${b.retrying ? ', retrying now' : ''}.</b> Temporal retried with backoff per the RetryPolicy in <code>activities.OPTIONS</code>; the Workflow code never saw the failures.</p>`;
+  h += `<p class="small dim">${b.start ? hhmmss(b.start) : ''} → ${b.end ? hhmmss(b.end) : 'running'}${b.attempt > 1 ? ` · attempt ${b.attempt}` : ''}</p>`;
+  if (b.error) h += `<h4>Last error</h4><pre>${esc(b.error)}</pre>`;
+  if (b.name === 'llm_create' && b.input) h += `<h4>Prompt (messages sent to the model)</h4><pre>${j(b.input.messages)}</pre><h4>Tools offered</h4><pre>${j(b.input.tools)}</pre>`;
+  else if (b.input) h += `<h4>Input</h4><pre>${j(b.input)}</pre>`;
+  if (b.result !== undefined) h += `<h4>Result${b.name === 'llm_create' ? ` (model: ${esc(b.result.model)})` : ''}</h4><pre>${j(b.result)}</pre>`;
+  if (b.name) h += `<h4>Activity code</h4>` + snippet('activities', `async def ${b.name}(`, 1, 14);
+  if (b.kind === 'timer') h += `<h4>Workflow code</h4>` + snippet('workflow', 'await workflow.wait_condition(', 1, 8);
+  if (b.kind === 'update') h += `<h4>Workflow code</h4>` + snippet('workflow', '@workflow.update', 0, 18);
+  openDrawer(b.label, h + `<p>${tuiLink(wfId)}</p>`);
+}
+
+/* ---------- cases view ---------- */
+function tab(name){ ['cases','demo'].forEach(n => { $(n).classList.toggle('on', n === name); $('t-' + n).classList.toggle('on', n === name); }); }
+async function loadQueue(){
+  const rows = await api('/api/cases');
+  $('qrows').innerHTML = rows.map(r => `<div class="qrow ${r.id === current ? 'on' : ''}" onclick="openCase('${r.id}')">
+    <div><b>${esc(r.id)}</b> <span class="pill s-${r.status || ''}">${esc(r.status || r.run_status)}</span></div>
+    <div class="small dim">${esc(r.title || '')}</div><div class="small dim">${esc(r.severity || '')} · ${esc(r.host || '')} · ${hhmmss(r.started)}</div></div>`).join('') || '<p class="dim" style="padding:12px">No cases yet.</p>';
+}
+async function newCase(){
+  try { const r = await post('/api/cases', {scenario: $('newScenario').value}); await openCase(r.id); }
+  catch (e) { alert(e.message + ' (a case for this alert may already be open)'); }
+}
+async function openCase(id){ current = id; await renderCase(); loadQueue(); }
+let CASE = null, HIST = [];
+async function renderCase(){
+  if (!current) return;
+  const [c, h] = await Promise.all([api(`/api/cases/${current}`), api(`/api/cases/${current}/history`)]);
+  CASE = c; HIST = h.bars;
+  const a = c.alert || {};
+  let html = `<h2 style="margin:0 0 4px">${esc(a.title)}</h2><p class="dim">${esc(c.case_id)} · ${esc(a.host)} · ${esc(a.user)} · severity ${esc(a.severity)} · route ${esc(c.route || '-')} <span class="pill s-${c.status}">${c.status}</span></p>`;
+  if (c.approval_pending) html += `<div class="card banner"><div class="grow"><b>Proposed: ${esc(c.disposition.action)}</b><div class="small dim">${esc(c.disposition.rationale)}</div></div>
+    <input id="why" placeholder="Rationale" style="background:#0b0b14;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px">
+    <button class="good" onclick="decide('approve')">Approve</button><button class="bad" onclick="decide('reject')">Reject</button>
+    <span class="why" onclick="barDrawer({kind:'update',label:'decide (Update)'}, current)">What Temporal does here</span></div>`;
+  html += `<div class="card"><h3>Timeline</h3><div class="tl">${c.timeline.map((t, i) => `<span class="dim mono">${hhmmss(t.at)}</span><span><span class="pill s-${t.status}">${t.status}</span></span><span>${esc(t.note)}</span><span class="why" onclick="stepDrawer(${i})">What Temporal did here</span>`).join('')}</div></div>`;
+  if (c.findings.length) html += `<div class="card"><h3>Findings</h3>${c.findings.map((f, i) => `<div>[${i}] <b>${esc(f.agent)}</b> ${esc(f.statement)} <span class="dim small">cites ${f.evidence_refs.map(esc).join(', ')} · conf ${f.confidence}</span></div>`).join('')}</div>`;
+  if (c.evidence.length) html += `<div class="card"><h3>Evidence</h3>${c.evidence.map(e => `<details><summary><b>${esc(e.ref)}</b> <span class="dim">${esc(e.source)} · ${esc(e.agent)}</span> ${esc(e.content.summary || '')}</summary><pre>${j(e.content)}</pre></details>`).join('')}</div>`;
+  if (c.soar) html += `<div class="card"><h3>SOAR</h3>${esc(c.soar.soar_id)} · ${c.soar.created ? 'filed' : 'already filed (retry was harmless)'}</div>`;
+  $('detail').innerHTML = html + `<p>${tuiLink(c.case_id)}</p>`;
+}
+function stepDrawer(i){
+  const t = CASE.timeline, from = new Date(t[i].at), to = t[i + 1] ? new Date(t[i + 1].at) : new Date(8.64e15);
+  const bars = HIST.filter(b => b.kind !== 'workflow' && new Date(b.start) >= new Date(from - 1500) && new Date(b.start) < to);
+  const rows = bars.map((b, k) => `<tr><td class="mono">${hhmmss(b.start)}</td><td><a href="#" onclick="barDrawer(HIST[${HIST.indexOf(b)}], current);return false">${esc(b.label)}</a></td><td>${b.kind}${b.attempt > 1 ? ' · attempt ' + b.attempt : ''}</td></tr>`).join('');
+  openDrawer(`${t[i].status}: what Temporal did here`,
+    `<p>Everything the Workflow did between this step and the next, read from the real event history. Click a row for its inputs, outputs and code.</p>
+     <table class="small" style="width:100%">${rows || '<tr><td class="dim">No Activities in this step (a pure state change in Workflow code).</td></tr>'}</table>
+     <h4>Workflow code</h4>${snippet('workflow', `Status.${t[i].status}`, 3, 4)}<p>${tuiLink(current)}</p>`);
+}
+async function decide(decision){
+  try { await post(`/api/cases/${current}/decide`, {decision, rationale: $('why').value}); } catch (e) { alert('Rejected by the Update validator: ' + e.message); }
+  renderCase(); loadQueue();
+}
+
+/* ---------- self demo ---------- */
+function showStory(){ const s = META.simulations.find(s => s.name === $('sim').value); $('story').textContent = s ? s.story : ''; }
+async function startDemo(){
+  const r = await post(`/api/demo/${$('sim').value}`); demoId = r.id; paused = false;
+  $('pause').disabled = false; $('pause').textContent = 'Pause'; $('rows').innerHTML = ''; setSteps(1, false, false);
+}
+function togglePause(){ paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; }
+function setSteps(active, broke, done){
+  $('st1').className = 'step ' + (broke || done ? 'done' : 'on');
+  $('st2').className = 'step ' + (done && broke ? 'done' : broke ? 'on' : '');
+  $('st3').className = 'step ' + (done ? 'on' : '');
+}
+const HOT = {  // case status -> the line of workflow.py that is executing
+  NEW: 'TriageAgent(inp.scenario).run', TRIAGED: 'RoutingPolicy().decide', INVESTIGATING: 'await self._investigate(inp)',
+  DISPOSITION_PROPOSED: 'await workflow.wait_condition(', ESCALATED: 'Status.ESCALATED',
+  REJECTED: 'Status.REJECTED', APPROVED: 'await call(soar_submit', SUBMITTED: 'Status.SUBMITTED', AUTO_RESOLVED: 'Status.AUTO_RESOLVED', NEEDS_REVIEW: 'Status.NEEDS_REVIEW',
+};
+function renderSource(status){
+  const lines = SRC.workflow.split('\n'); const needle = HOT[status] || '';
+  const hot = lines.findIndex(l => l.includes(needle));
+  $('src').innerHTML = lines.map((l, i) => `<div class="ln ${i === hot ? 'hot' : ''}"><i>${i + 1}</i><span>${esc(l)}</span></div>`).join('');
+  const el = $('src').children[hot]; if (el) el.scrollIntoView({block:'center', behavior:'smooth'});
+}
+let lastHot = null;
+async function pollDemo(){
+  if (!demoId || paused) return;
+  try {
+    const [c, h] = await Promise.all([api(`/api/cases/${demoId}`), api(`/api/cases/${demoId}/history`)]);
+    if (c.status !== lastHot) { renderSource(c.status); lastHot = c.status; }
+    const bars = h.bars, t0 = new Date(bars[0].start), end = h.running ? new Date(h.now) : new Date(bars[0].end || h.now);
+    const span = Math.max(end - t0, 1000), pct = d => Math.min(100, Math.max(0, (new Date(d) - t0) / span * 100));
+    window.DEMO_BARS = bars;
+    const seg = (kind, a, z, live) => { const l = pct(a), r = z ? pct(z) : 100;
+      return `<div class="gb k-${kind} ${live ? 'live' : ''}" style="left:${l}%;width:${Math.max(r - l, .4)}%"></div>`; };
+    $('rows').innerHTML = bars.map((b, i) => {
+      const track = b.retrying ? seg('retry', b.start, null, true)
+        : b.failed_until ? seg('retry', b.start, b.failed_until) + seg(b.kind, b.failed_until, b.end, !b.end)
+        : seg(b.kind, b.start, b.end, !b.end);
+      return `<div class="grow-row" onclick="barDrawer(DEMO_BARS[${i}], demoId)"><div class="glabel" title="${esc(b.error || '')}">${esc(b.label)}${b.attempt > 1 ? ` <span style="color:var(--bad)">· attempt ${b.attempt}</span>` : ''}</div>
+      <div class="track">${track}</div></div>`; }).join('');
+    const broke = bars.some(b => b.attempt > 1 || b.kind === 'failed' || b.fired) || c.timeline.some(t => t.status === 'REJECTED' || t.status === 'ESCALATED') || c.approval_pending;
+    setSteps(0, broke, !h.running);
+    $('dstatus').innerHTML = `· <span class="pill s-${c.status}">${c.status}</span> ${h.running ? '' : '<span class="dim">(completed)</span>'}`;
+  } catch (e) { /* the workflow may not exist for a moment after Start over */ }
+}
+
+(async function boot(){
+  META = await api('/api/meta');
+  [SRC.workflow, SRC.activities] = await Promise.all(['workflow', 'activities'].map(m => fetch('/api/source/' + m).then(r => r.text())));
+  $('tui').href = META.temporal_ui;
+  $('sim').innerHTML = META.simulations.map(s => `<option>${s.name}</option>`).join(''); showStory();
+  $('newScenario').innerHTML = ['hitl-confirm-01', 'auto-fp-01', 'triage-lowconf-01', 'hitl-flaky-01'].map(s => `<option>${s}</option>`).join('');
+  renderSource('NEW'); loadQueue();
+  const auto = location.hash.match(/^#demo=(\w+)/);  // e.g. /#demo=activity_failure_retry starts it
+  if (auto) { tab('demo'); $('sim').value = auto[1]; showStory(); startDemo(); }
+  setInterval(pollDemo, 1000); setInterval(() => {  // refresh the case view, but never under the analyst's cursor
+    const busy = document.activeElement === $('why') || $('drawer').classList.contains('on');
+    if ($('cases').classList.contains('on') && !busy) { renderCase(); loadQueue(); } }, 3000);
+})();
+</script>
+</body>
+</html>

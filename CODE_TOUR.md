@@ -70,8 +70,8 @@ Two compose services, `services/mock_splunk.py` and `services/mock_soar.py`, imp
 
 ## 6. `src/soc/api.py` and `src/soc/ui/index.html` — the analyst app (about 2 minutes)
 
-- `api.py` — FastAPI. List cases, get a case (Workflow Query), `decide` (Workflow Update), and `/insight/...` for the drawers (a history excerpt, retry count, LLM I/O, Temporal UI link). No business sequencing here.
-- `ui/index.html` — case queue, case detail (timeline, findings, evidence), Approve / Reject. Deep detail is a right-hand **drawer** ("What Temporal did here"), the same idea as the ClickHouse demo's "SQL + EXPLAIN" panel: the main page stays clean; the SA opens a drawer when they want the Temporal story.
+- `api.py` — FastAPI. List cases, start, get a case (Workflow Query), `decide` (Workflow Update; a validator refusal becomes HTTP 409), `/history` (`HistoryBars` turns the raw event history into Gantt bars with decoded inputs/outputs and retry attempts), `/source` (the real code the UI shows), and `/demo/{scenario}` (runs a simulation in the background). No business sequencing here.
+- `ui/index.html` — one file, plain JS. **Cases** tab: queue, case detail (timeline, findings, evidence), Approve / Reject. **Self demo** tab: a scenario picker, a *runs → breaks → recovers* stepper, `workflow.py` with the executing line highlighted, and a Gantt polled every second from the real event history. Deep detail is a right-hand **drawer** ("What Temporal did here"), the same idea as the ClickHouse demo's "SQL + EXPLAIN" panel: the main page stays clean; the SA opens a drawer when they want the Temporal story.
 
 `simulate.py` is the self-driving demo: five named scenarios that start a real Workflow, play the analyst, and narrate the timeline plus what Temporal did (from the real event history). The pytest suite runs the same scenarios.
 

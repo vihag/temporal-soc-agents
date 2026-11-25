@@ -14,13 +14,15 @@ Full talking points and the cost/LOC story sit in [`DESIGN.md`](DESIGN.md). Walk
 
 ## Script
 
+0. **Self demo opener** (2 min, optional). Open `http://localhost:8080/#demo=activity_failure_retry`. On the left, the real `workflow.py`, with the executing line highlighted. On the right, the Gantt built from the real event history: a tool call fails twice, a model answer is garbled, and the SOAR response is lost. Each shows as a red segment, then green. The stepper goes *Workflow runs → Something breaks → It recovers*. Click any bar for its inputs, outputs, error and Activity code.
+
 1. **Problem and form factor** (2 min). A Splunk alert has to become a contain / escalate / close decision, with a human gate and a single SOAR ticket. The old system is a state table, bots, and a webhook. This is one Workflow and a small analyst app. Show `diagrams/architecture.png` and `diagrams/case-states.png` if useful, then the live UI queue.
 
 2. **Start a case** (2 min). From the UI or `python -m soc start --scenario hitl-confirm-01`. Open the case. Point at the Workflow ID `case-…` in the Temporal UI (Cloud if you are on the profile).
 
 3. **Happy path and LLM visibility** (3 min). On the case timeline: triage is 1–3 Activities (tool-calling agent, no loop). Evidence (and Threat, if on) is a short loop of `llm_create` and named tools. Open **one** drawer on the triage step: prompt, response, `model_requested` vs `model` returned, link to the same event in Temporal Cloud.
 
-4. **Kill the worker** (3 min). While Evidence is mid-loop (or start a second case and kill during its loop): `docker compose stop temporal-worker`. Show the Workflow still open. Start the worker again. Completed LLM and tool Activities are not re-run; the next Activity resumes. This is the durable-execution beat.
+4. **Kill the worker** (3 min). While Evidence is mid-loop (or start a second case and kill during its loop): `docker compose kill worker`. Show the Workflow still open. `docker compose start worker`. Completed LLM and tool Activities are not re-run. Any call that was in flight when the worker died is retried once its 30s StartToClose timeout passes, and it shows as a red retry segment in the Self demo Gantt and the drawer. This is the durable-execution beat.
 
 5. **Human in the loop** (3 min). Back on the first case (or wait for disposition). The detail page shows the proposal and Approve / Reject — not a wall of history. Approve with a short rationale. Show the Update in Temporal UI and the status move to `SUBMITTED`.
 

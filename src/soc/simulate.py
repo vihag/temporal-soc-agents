@@ -12,12 +12,14 @@ from datetime import datetime
 
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowHandle
+from temporalio.common import WorkflowIDConflictPolicy
 
 from soc.models import Case, CaseInput, DecisionRequest, Status
 from soc.scenarios import Scenario
 from soc.settings import Settings
 from soc.workflow import CaseInvestigationWorkflow
 
+TERMINATE = WorkflowIDConflictPolicy.TERMINATE_EXISTING
 WAITING = (Status.DISPOSITION_PROPOSED, Status.ESCALATED)
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -112,15 +114,26 @@ class Narrator:
 
 
 async def run_simulation(
-    client: Client, sim: Simulation, settings: Settings, sleep: Sleep, narrator: Narrator
+    client: Client,
+    sim: Simulation,
+    settings: Settings,
+    sleep: Sleep,
+    narrator: Narrator,
+    restart: bool = False,
 ) -> Case:
-    """Start the case, play the analyst's script, return the final case."""
+    """Start the case, play the analyst's script, return the final case.
+
+    `restart` terminates a still-running case with the same ID first (the UI's Start Over)."""
     alert_id = Scenario.load(sim.scenario, settings.fixtures_dir).alert["alert_id"]
     inp = CaseInput(
         sim.scenario, settings.enable_threat, sim.approval_timeout_s, settings.max_agent_steps
     )
     handle = await client.start_workflow(
-        CaseInvestigationWorkflow.run, inp, id=f"case-{alert_id}", task_queue=settings.task_queue
+        CaseInvestigationWorkflow.run,
+        inp,
+        id=f"case-{alert_id}",
+        task_queue=settings.task_queue,
+        id_conflict_policy=TERMINATE if restart else WorkflowIDConflictPolicy.FAIL,
     )
 
     async def wait_until(done: Callable[[Case], bool]) -> None:
@@ -135,6 +148,7 @@ async def run_simulation(
             await sleep(sim.approval_timeout_s + 1)
             await wait_until(lambda c: c.status == Status.ESCALATED)
             continue
+        await sleep(0)  # the analyst reads the proposal (the UI demo paces this)
         narrator.out(f"  {'':8}  analyst -> decide({action})")
         await handle.execute_update(
             CaseInvestigationWorkflow.decide,

@@ -289,7 +289,7 @@ Tool dispatch is a small `if name == ...` (or a dict of Activity functions) in `
 | Activity | Timeout | Retry |
 | --- | --- | --- |
 | `fetch_alert` | 10s | 3 attempts |
-| `llm_create` | 45s | 5 attempts; 4xx except 429 not retried |
+| `llm_create` | 30s | 5 attempts; 4xx except 429 not retried |
 | `run_tool` | 15s | 3 attempts |
 | `notify` | 10s | 3 attempts; failure must not block the wait |
 | `soar_submit` | 15s | 5 attempts; key `soar-submit-{alert_id}` |
@@ -424,7 +424,9 @@ Deep Temporal and LLM detail is *not* dumped on the detail page. It opens on dem
 
 The analyst can run the whole demo without opening a drawer. The SA can go as deep as they want without leaving the app, and can still jump to Temporal Cloud.
 
-Implementation stays one HTML file plus `api.py` (an `/insight/{workflow_id}/{event_id}` endpoint that reads history via the Temporal client). Do not build a generic "observability product."
+Implementation stays one HTML file plus `api.py`. A `/history` endpoint reads the event history through the Temporal client, and the drawers render from it. Do not build a generic "observability product."
+
+**Self demo mode** (added in T3, modelled on the temporal.io homepage demo): a scenario dropdown (the five simulations), a *Workflow runs → Something breaks → It recovers* stepper, Pause / Start over, the real `workflow.py` with the executing line highlighted, and a Gantt-style event timeline (workflow, each Activity, failed attempts as red segments, durable timers, Update markers) polled every ~1s from the real history. It uses the same drawers.
 
 The CLI remains for scripting and for a fallback if the UI is not up:
 
