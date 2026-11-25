@@ -65,7 +65,7 @@ SIMULATIONS = {
         Simulation(
             "activity_failure_retry",
             "hitl-flaky-01",
-            "Splunk times out twice and SOAR's reply is lost: Temporal retries, one ticket.",
+            "Splunk times out, the model garbles a reply, SOAR's response is lost: retries heal.",
             ["approve"],
         ),
     ]

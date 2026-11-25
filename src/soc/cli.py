@@ -5,6 +5,7 @@
     python -m soc view case-SPL-2026-0001
     python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "matches"
     python -m soc simulate --all
+    python -m soc grok-smoke          # one live Grok call; exits 2 if XAI_API_KEY is unset
 
 The CLI talks to Temporal directly (start, Query, Update); it never holds case state itself.
 """
@@ -64,18 +65,41 @@ async def decide(workflow_id: str, decision: str, analyst: str, rationale: str) 
     print_case(await handle.execute_update(CaseInvestigationWorkflow.decide, request))
 
 
+def ensure_mocks(settings: Settings) -> None:
+    """Start Mock Splunk / Mock SOAR in-process unless they are already running."""
+    from services.common import serve_in_thread
+    from services.mock_soar import soar_server
+    from services.mock_splunk import splunk_server
+
+    for url, factory in ((settings.splunk_url, splunk_server), (settings.soar_url, soar_server)):
+        try:
+            urllib.request.urlopen(f"{url}/healthz", timeout=1)
+        except OSError:
+            serve_in_thread(factory(int(url.rsplit(":", 1)[1])))
+
+
+async def grok_smoke() -> int:
+    """One live triage turn against Grok. Exit 2 without a key (never spends by accident)."""
+    from soc.llm import GrokClient
+    from soc.models import LLMRequest
+
+    settings = Settings.from_env()
+    if not settings.xai_api_key:
+        print("XAI_API_KEY is not set; skipping live Grok smoke test.")
+        return 2
+    messages = [{"role": "user", "content": 'Reply with JSON {"ok": true}.'}]
+    reply = await GrokClient(settings).complete(LLMRequest("smoke", "", 0, messages, []))
+    print(f"model={reply.model} tokens={reply.tokens} content={reply.content}")
+    return 0
+
+
 async def simulate(names: list[str]) -> None:
     """Run scenarios end to end against the configured Temporal server, with an in-process
-    worker and (if not already running) the mock SOAR service."""
+    worker and (if not already running) the mock services."""
     settings = Settings.from_env()
     logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # injected faults are expected
     logging.getLogger("temporalio.worker").setLevel(logging.ERROR)
-    try:
-        urllib.request.urlopen(f"{settings.soar_url}/healthz", timeout=1)
-    except OSError:
-        from services.mock_soar import serve_in_thread
-
-        serve_in_thread(int(settings.soar_url.rsplit(":", 1)[1]))
+    ensure_mocks(settings)
     client = await connect()
     async with build_worker(client, settings.task_queue):
         for name in names:
@@ -91,6 +115,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="soc", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("worker")
+    sub.add_parser("grok-smoke")
     sub.add_parser("start").add_argument("--scenario", default="hitl-confirm-01")
     sub.add_parser("view").add_argument("workflow_id")
     d = sub.add_parser("decide")
@@ -114,5 +139,7 @@ def main() -> None:
             asyncio.run(view(args.workflow_id))
         case "decide":
             asyncio.run(decide(args.workflow_id, args.decision, args.analyst, args.rationale))
+        case "grok-smoke":
+            raise SystemExit(asyncio.run(grok_smoke()))
         case "simulate":
             asyncio.run(simulate(list(SIMULATIONS) if args.all or not args.names else args.names))

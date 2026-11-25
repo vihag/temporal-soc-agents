@@ -52,7 +52,8 @@ If you understand `Agent.run()`, you understand every specialist.
 
 - `activities.py` is thin on purpose: `llm_create`, `run_tool`, `fetch_alert`, `notify`, `soar_submit`. Each constructs a client or a tool and calls it.
 - `llm.py` — `LLMClient` (OpenAI-compatible Chat Completions, `base_url` → xAI, **`max_retries=0`**) and `FixtureLLMClient`. Temporal, not the vendor SDK, owns retries.
-- Invalid structured output is retried, capped. 429 uses `Retry-After`. Other 4xx become a non-retryable error and the Workflow flags `NEEDS_REVIEW`.
+- `llm_create` validates every reply (required answer keys, only offered tools). A bad reply raises, and Temporal retries the call: that is self-healing, capped at 5 attempts. `GrokClient` maps 429 to `next_retry_delay=Retry-After`. Other 4xx become non-retryable, so the Workflow flags `NEEDS_REVIEW`. Tokens and the model that actually answered are logged on every call.
+- `FixtureLLMClient` is used unless `GROK_CLIENT=http` **and** `XAI_API_KEY` is set. Tests and CI never call Grok.
 
 This is why the LLM is an Activity: Workflows must be deterministic; a model call is I/O.
 
@@ -60,9 +61,7 @@ This is why the LLM is an Activity: Workflows must be deterministic; a model cal
 
 ## 5. `src/soc/tools.py` and `src/soc/soar.py` — externals (about 2 minutes)
 
-(In T1 the five tools answer from `fixtures/scenarios/*.json` inside `activities.run_tool`; `tools.py` and Mock Splunk land in T2.)
-
-- `Tool` base class plus five tools (`search_evidence`, `list_alert_evidence`, `lookup_asset`, `enrich_ioc`, `lookup_mitre`). Each has a `name`, a JSON schema, and `run()`. They talk to Mock Splunk over HTTP.
+- `Tool` base class plus five tools (`search_evidence`, `list_alert_evidence`, `lookup_asset`, `enrich_ioc`, `lookup_mitre`). Each declares a `name`, a description and its params. The base class builds the JSON schema and `run()` queries Mock Splunk over HTTP. `TOOLS` is an explicit dict of the five instances, not a plugin loader.
 - `SoarClient` / `HttpSoarClient`. `soar_submit` uses idempotency key `soar-submit-{alert_id}`. Mock SOAR is unique on `case_id` and will return the original ticket if the Activity is retried after a timeout-on-success.
 
 Two compose services, `services/mock_splunk.py` and `services/mock_soar.py`, implement those HTTP APIs. You do not need to read them unless you are following a tool call all the way down.

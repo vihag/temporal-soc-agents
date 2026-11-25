@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any, TypeVar
 
+import httpx
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
@@ -20,10 +21,9 @@ from soc.models import Alert, LLMReply, LLMRequest, SoarReceipt, SoarSubmit, Too
 from soc.scenarios import Scenario
 from soc.settings import Settings
 from soc.soar import HttpSoarClient
+from soc.tools import TOOLS
 
 T = TypeVar("T")
-
-TOOLS = ("list_alert_evidence", "search_evidence", "lookup_asset", "enrich_ioc", "lookup_mitre")
 
 
 def _scenario(name: str) -> Scenario:
@@ -41,30 +41,46 @@ def _maybe_fail(scenario: Scenario, name: str) -> None:
 
 @activity.defn
 async def fetch_alert(scenario_name: str) -> Alert:
-    scenario = _scenario(scenario_name)
-    _maybe_fail(scenario, "fetch_alert")
-    return Alert(**scenario.alert)
+    _maybe_fail(_scenario(scenario_name), "fetch_alert")
+    async with httpx.AsyncClient(base_url=Settings.from_env().splunk_url, timeout=10) as http:
+        response = await http.get("/v1/alert", params={"scenario": scenario_name})
+    response.raise_for_status()
+    return Alert(**response.json())
 
 
 @activity.defn
 async def llm_create(request: LLMRequest) -> LLMReply:
-    """One model turn. The client never retries on its own: Temporal owns retries."""
-    _maybe_fail(_scenario(request.scenario), "llm_create")
-    reply = await make_llm_client(Settings.from_env()).complete(request)
+    """One model turn, then validation. Self-healing: an answer that is not what we asked for
+    (missing keys, unknown tool) raises, and Temporal retries the call: a fresh sample."""
+    scenario, settings = _scenario(request.scenario), Settings.from_env()
+    _maybe_fail(scenario, "llm_create")
+    reply = await make_llm_client(settings).complete(request)
+    garble = scenario.fault(f"llm_invalid:{request.agent}")
+    if isinstance(garble, int) and activity.info().attempt <= garble:  # simulated model glitch
+        reply = LLMReply(reply.model, content={"unparsed": "Sure! Here is my analysis..."})
     activity.logger.info(
-        "llm_create agent=%s step=%s model=%s", request.agent, request.step, reply.model
+        "llm_create agent=%s step=%s model=%s (requested %s) tokens=%s",
+        request.agent,
+        request.step,
+        reply.model,
+        settings.xai_model,
+        reply.tokens,
     )
+    if reply.tool is not None and reply.tool not in request.tools:
+        raise ApplicationError(f"model called unavailable tool {reply.tool!r}; retrying")
+    missing = set(request.answer_keys) - set(reply.content or {})
+    if reply.tool is None and missing:
+        raise ApplicationError(f"model answer missing {sorted(missing)}; retrying")
     return reply
 
 
 @activity.defn
 async def run_tool(call: ToolCall) -> dict[str, Any]:
-    """Dispatch one of the five named tools. In T1 they answer from the scenario fixture."""
+    """Run one of the five named tools against Mock Splunk."""
     if call.name not in TOOLS:
         raise ApplicationError(f"unknown tool {call.name!r}", non_retryable=True)
-    scenario = _scenario(call.scenario)
-    _maybe_fail(scenario, f"run_tool:{call.name}")
-    return scenario.tool_result(call.name)
+    _maybe_fail(_scenario(call.scenario), f"run_tool:{call.name}")
+    return await TOOLS[call.name].run(Settings.from_env().splunk_url, call.scenario, call.args)
 
 
 @activity.defn

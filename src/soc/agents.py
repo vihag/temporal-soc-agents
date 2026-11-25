@@ -1,9 +1,10 @@
 """The four SENTINEL agents. They run *inside* the Workflow, so they may only call Activities.
 
 Base `Agent._converse` is the Temporal AI-cookbook loop in one place: ask the model (llm_create
-Activity); if it wants a tool, run it (run_tool Activity) and ask again; stop at an answer or the
-step cap. Every turn is a recorded event, so a crash mid-loop resumes at the next turn, not from
-scratch. Subclasses only choose instructions, tools, how many tool calls, and how to parse.
+Activity); if it wants a tool, run it (run_tool Activity) and ask again, until it answers. On the
+last allowed turn no tools are offered, so the model must answer. Every turn is a recorded event:
+a crash mid-loop resumes at the next turn, not from scratch. Subclasses only choose instructions,
+tools, answer keys, and whether to loop.
 """
 
 from __future__ import annotations
@@ -23,29 +24,40 @@ class Agent:
     instructions: ClassVar[str]
     tools: ClassVar[tuple[str, ...]] = ()
     loops: ClassVar[bool] = False  # False: cookbook "tool call" (<=1 tool); True: "agentic loop"
+    answer_keys: ClassVar[list[str]] = ["findings"]
 
     def __init__(self, scenario: str, max_steps: int = 6) -> None:
         self.scenario = scenario
         self.max_tool_calls = max_steps if self.loops else 1
 
     async def _converse(self, prompt: str) -> tuple[dict[str, Any], list[Evidence]]:
+        system = f"{self.instructions} Answer with a JSON object with keys: {self.answer_keys}."
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.instructions},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
         evidence: list[Evidence] = []
         for step in range(self.max_tool_calls + 1):
-            request = LLMRequest(self.name, self.scenario, step, messages, list(self.tools))
+            tools = list(self.tools) if step < self.max_tool_calls else []  # last turn: answer
+            request = LLMRequest(self.name, self.scenario, step, messages, tools, self.answer_keys)
             reply = await call(llm_create, request)
-            if reply.tool is None or step == self.max_tool_calls:
-                if reply.content is None:
-                    raise ApplicationError(f"{self.name} hit its step cap without an answer")
+            if reply.tool is None:
+                assert reply.content is not None
                 return reply.content, evidence
             result = await call(run_tool, ToolCall(self.scenario, reply.tool, reply.args))
             evidence.append(Evidence(result.get("ref", reply.tool), reply.tool, self.name, result))
-            messages.append({"role": "assistant", "content": f"call {reply.tool}({reply.args})"})
-            messages.append({"role": "tool", "content": json.dumps(result)})
-        raise AssertionError("unreachable")
+            fn = {"name": reply.tool, "arguments": json.dumps(reply.args)}
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": reply.call_id, "type": "function", "function": fn}],
+                }
+            )
+            messages.append(
+                {"role": "tool", "tool_call_id": reply.call_id, "content": json.dumps(result)}
+            )
+        raise ApplicationError(f"{self.name} hit its step cap without an answer")
 
     def _findings(self, answer: dict[str, Any]) -> list[Finding]:
         return [Finding(agent=self.name, **f) for f in answer.get("findings", [])]
@@ -55,6 +67,7 @@ class TriageAgent(Agent):
     name = "triage"
     instructions = "You triage SOC alerts. Return severity, verdict, confidence (0-1), rationale."
     tools = ("list_alert_evidence",)
+    answer_keys = ["severity", "verdict", "confidence", "rationale"]
 
     async def run(self, alert: Alert) -> Triage:
         answer, _ = await self._converse(f"Triage this alert: {json.dumps(asdict(alert))}")
@@ -88,7 +101,7 @@ class ThreatAgent(Agent):
 class DispositionAgent(Agent):
     name = "disposition"
     instructions = "Propose one SOAR action for the case, citing finding indexes."
-    tools = ()
+    answer_keys = ["action", "rationale", "cited_findings"]
 
     async def run(self, case: Case) -> Disposition:
         findings = [f"[{i}] {f.statement}" for i, f in enumerate(case.findings)]

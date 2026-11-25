@@ -16,11 +16,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 @dataclass(frozen=True)
 class Settings:
     task_queue: str = "soc-case"
-    grok_client: str = "fixture"  # "fixture" (default, free) or "http" (live Grok, lands in T2)
+    grok_client: str = "fixture"  # "fixture" (default, free) or "http" (live Grok + XAI_API_KEY)
     enable_threat: bool = True
     approval_timeout_s: int = 120
     max_agent_steps: int = 6
     soar_url: str = "http://127.0.0.1:8002"
+    splunk_url: str = "http://127.0.0.1:8001"
+    xai_api_key: str = ""
+    xai_base_url: str = "https://api.x.ai/v1"
+    xai_model: str = "grok-4.3"
+    llm_max_tokens: int = 800
     fixtures_dir: Path = REPO_ROOT / "fixtures" / "scenarios"
 
     @classmethod
@@ -33,6 +38,11 @@ class Settings:
             approval_timeout_s=int(env("APPROVAL_TIMEOUT_S", str(cls.approval_timeout_s))),
             max_agent_steps=int(env("MAX_AGENT_STEPS", str(cls.max_agent_steps))),
             soar_url=env("SOAR_URL", cls.soar_url),
+            splunk_url=env("SPLUNK_URL", cls.splunk_url),
+            xai_api_key=env("XAI_API_KEY", ""),
+            xai_base_url=env("XAI_BASE_URL", cls.xai_base_url),
+            xai_model=env("XAI_MODEL", cls.xai_model),
+            llm_max_tokens=int(env("LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
             fixtures_dir=Path(env("FIXTURES_DIR", str(cls.fixtures_dir))),
         )
 

@@ -149,16 +149,19 @@ class LLMRequest:
     step: int
     messages: list[dict[str, Any]]
     tools: list[str]
+    answer_keys: list[str] = field(default_factory=list)  # a final answer must have these
 
 
 @dataclass
 class LLMReply:
     """Either a final structured answer (`content`) or one tool call (`tool` + `args`)."""
 
-    model: str
+    model: str  # the model that actually answered
     content: dict[str, Any] | None = None
     tool: str | None = None
     args: dict[str, Any] = field(default_factory=dict)
+    call_id: str = ""
+    tokens: tuple[int, int] = (0, 0)  # prompt, completion
 
 
 @dataclass

@@ -35,5 +35,6 @@ async def test_simulation(name, env, settings, soar):
         assert case.soar and case.soar.created is False  # the retry found the first ticket
         assert any("retried run_tool" in line for line in log)
         assert any("retried soar_submit" in line for line in log)
+        assert any("retried llm_create" in line for line in log)  # self-healed model answer
     if case.soar:
         assert [t["case_id"] for t in soar.store.tickets.values()].count(case.case_id) == 1

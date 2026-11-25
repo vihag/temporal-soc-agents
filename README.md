@@ -13,13 +13,14 @@ uv run python -m soc simulate --all            # terminal 2: five narrated end-t
 uv run pytest -q                               # same scenarios on a time-skipping test server
 ```
 
-`simulate` runs its own worker and Mock SOAR in-process, so `start-dev` is the only other thing that needs to be running. Scenarios: `auto_resolve`, `approve_to_submitted`, `reject_then_reinvestigate`, `approval_timeout_escalated`, `activity_failure_retry`. To run one: `uv run python -m soc simulate activity_failure_retry`.
+`simulate` runs its own worker and starts Mock Splunk / Mock SOAR in-process if they are not running, so `start-dev` is the only other thing that needs to be up. Scenarios: `auto_resolve`, `approve_to_submitted`, `reject_then_reinvestigate`, `approval_timeout_escalated`, `activity_failure_retry`. To run one: `uv run python -m soc simulate activity_failure_retry`.
 
 Drive a case by hand (and rehearse killing the worker mid-case):
 
 ```bash
-uv run python -m services.mock_soar            # terminal 2
-uv run python -m soc worker                    # terminal 3 (Ctrl-C it any time, start it again)
+uv run python -m services.mock_splunk          # terminal 2
+uv run python -m services.mock_soar            # terminal 3
+uv run python -m soc worker                    # terminal 4 (Ctrl-C it any time, start it again)
 uv run python -m soc start --scenario hitl-confirm-01
 uv run python -m soc view case-SPL-2026-0001
 uv run python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "Evidence matches the alert"
@@ -64,7 +65,7 @@ XAI_API_KEY=...
 XAI_MODEL=grok-4.3
 ```
 
-Then recreate the worker. Default is `reasoning_effort=none` and a token cap; see DESIGN.md §11 for the $50 spend cap. `make grok-smoke` (once it exists) should exit 2 if the key is unset.
+Then recreate the worker. Default is `reasoning_effort=none` and `LLM_MAX_TOKENS=800`; see DESIGN.md §11 for the $50 spend cap. `uv run python -m soc grok-smoke` makes one live call, or exits 2 if `XAI_API_KEY` is unset.
 
 ## Temporal Cloud
 
