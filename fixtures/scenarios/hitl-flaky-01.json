@@ -1,0 +1,5 @@
+{
+  "extends": "hitl-confirm-01",
+  "alert": {"alert_id": "SPL-2026-0004"},
+  "faults": {"run_tool:search_evidence": 2, "soar_submit": 1}
+}

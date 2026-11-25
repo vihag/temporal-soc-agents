@@ -1,0 +1,48 @@
+"""Environment settings, read once per process (worker, CLI). Never imported by Workflow code paths
+that run during replay, because env vars are not deterministic."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from temporalio.client import Client
+from temporalio.envconfig import ClientConfigProfile
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class Settings:
+    task_queue: str = "soc-case"
+    grok_client: str = "fixture"  # "fixture" (default, free) or "http" (live Grok, lands in T2)
+    enable_threat: bool = True
+    approval_timeout_s: int = 120
+    max_agent_steps: int = 6
+    soar_url: str = "http://127.0.0.1:8002"
+    fixtures_dir: Path = REPO_ROOT / "fixtures" / "scenarios"
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        env = os.environ.get
+        return cls(
+            task_queue=env("TASK_QUEUE", cls.task_queue),
+            grok_client=env("GROK_CLIENT", cls.grok_client),
+            enable_threat=env("ENABLE_THREAT", "1") == "1",
+            approval_timeout_s=int(env("APPROVAL_TIMEOUT_S", str(cls.approval_timeout_s))),
+            max_agent_steps=int(env("MAX_AGENT_STEPS", str(cls.max_agent_steps))),
+            soar_url=env("SOAR_URL", cls.soar_url),
+            fixtures_dir=Path(env("FIXTURES_DIR", str(cls.fixtures_dir))),
+        )
+
+
+async def connect() -> Client:
+    """Connect using the standard Temporal env config (TEMPORAL_ADDRESS, TEMPORAL_PROFILE, ...).
+
+    With nothing set this is the local dev server on localhost:7233; with a cloud profile it is
+    Temporal Cloud. Same code either way.
+    """
+    config = ClientConfigProfile.load().to_client_connect_config()
+    config.setdefault("target_host", "localhost:7233")
+    return await Client.connect(**config)

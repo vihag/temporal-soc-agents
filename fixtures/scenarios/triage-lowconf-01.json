@@ -1,0 +1,6 @@
+{
+  "extends": "auto-fp-01",
+  "alert": {"alert_id": "SPL-2026-0102"},
+  "llm": {"triage": [{"final": {"severity": "medium", "verdict": "suspicious", "confidence": 0.3,
+                                "rationale": "Not enough context to call it."}}]}
+}

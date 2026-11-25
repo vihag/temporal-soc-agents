@@ -1,0 +1,46 @@
+{
+  "alert": {
+    "alert_id": "SPL-2026-0001",
+    "title": "LSASS memory read by unsigned binary (possible credential dumping)",
+    "severity": "high",
+    "host": "fin-ws-042",
+    "user": "j.doe",
+    "privileged_account": true,
+    "crown_jewel": false,
+    "raw": {"rule": "EDR-LSASS-ACCESS", "process": "C:\\Users\\Public\\svc.exe", "sha256": "9f2c1e7a"}
+  },
+  "tools": {
+    "list_alert_evidence": {"ref": "EV-alert", "events": 3, "summary": "svc.exe opened lsass.exe with PROCESS_VM_READ"},
+    "search_evidence": {"ref": "EV-spl-1", "query": "host=fin-ws-042 process=svc.exe", "hits": 14, "summary": "svc.exe spawned from Outlook attachment at 09:12; outbound TLS to 185.220.101.7"},
+    "lookup_asset": {"ref": "EV-asset", "owner": "Finance", "criticality": "high", "summary": "Finance workstation with SAP access"},
+    "enrich_ioc": {"ref": "EV-ioc", "indicator": "185.220.101.7", "summary": "Known Tor exit node; reputation malicious (8/10 feeds)"},
+    "lookup_mitre": {"ref": "EV-mitre", "technique": "T1003.001", "summary": "OS Credential Dumping: LSASS Memory"}
+  },
+  "llm": {
+    "triage": [
+      {"tool": "list_alert_evidence", "args": {}},
+      {"final": {"severity": "high", "verdict": "true_positive", "confidence": 0.86,
+                 "rationale": "Unsigned binary reading LSASS on a privileged user's host."}}
+    ],
+    "evidence": [
+      {"tool": "search_evidence", "args": {"query": "host=fin-ws-042 process=svc.exe"}},
+      {"tool": "lookup_asset", "args": {"host": "fin-ws-042"}},
+      {"final": {"findings": [
+        {"statement": "svc.exe arrived via an Outlook attachment and read LSASS memory", "evidence_refs": ["EV-spl-1"], "confidence": 0.9},
+        {"statement": "Host is a high-criticality Finance workstation", "evidence_refs": ["EV-asset"], "confidence": 0.95}
+      ]}}
+    ],
+    "threat": [
+      {"tool": "enrich_ioc", "args": {"indicator": "185.220.101.7"}},
+      {"tool": "lookup_mitre", "args": {"behaviour": "lsass read"}},
+      {"final": {"findings": [
+        {"statement": "C2 traffic to a known-malicious Tor exit node", "evidence_refs": ["EV-ioc"], "confidence": 0.85},
+        {"statement": "Behaviour matches MITRE T1003.001 (LSASS credential dumping)", "evidence_refs": ["EV-mitre"], "confidence": 0.9}
+      ]}}
+    ],
+    "disposition": [
+      {"final": {"action": "isolate_host", "cited_findings": [0, 2, 3],
+                 "rationale": "Active credential theft with C2 on a Finance host: isolate fin-ws-042 and reset j.doe."}}
+    ]
+  }
+}

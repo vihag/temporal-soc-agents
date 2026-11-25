@@ -130,7 +130,7 @@ Four application processes, plus the Temporal server. Each split is justified; w
 
 Not separate services: routing policy, notify, LLM, agents, a gateway, a database. Case state lives in Temporal. The API queries it.
 
-The UI and CLI talk only to `analyst-api`. They start Workflows, call `decide`, and read `get_case`. They also fetch a small "insight" payload for the drawers (history excerpt, retries, LLM I/O, Temporal UI link).
+The UI talks only to `analyst-api`. The CLI is a direct Temporal client (start, Query, Update), resolved in T1. They start Workflows, call `decide`, and read `get_case`. They also fetch a small "insight" payload for the drawers (history excerpt, retries, LLM I/O, Temporal UI link).
 
 ---
 
@@ -198,7 +198,7 @@ Kept, as ordinary code in the Workflow or on `Case` / `RoutingPolicy`:
 
 | Class | File | Responsibility |
 | --- | --- | --- |
-| `Case`, `Evidence`, `Finding`, `Disposition`, `Decision`, `CaseView` | `models.py` | Domain data. `Case.status` is derived. No I/O |
+| `Case`, `Evidence`, `Finding`, `Disposition`, `Decision`, `CaseView` | `models.py` | Domain data. `Case.status` is written only by the Workflow's happy path (`_enter`). No I/O |
 | `RoutingPolicy` | `models.py` | Pure route decision |
 | `Agent` (base) | `agents.py` | Shared `run()` mechanics: call `llm_create`, optionally a tool, append history. Subclasses set instructions, tool names, and whether to loop |
 | `TriageAgent`, `DispositionAgent` | `agents.py` | E2: at most one tool, then a structured result |
@@ -521,7 +521,7 @@ T1 is the first interview-demoable CLI path. T3 is the form-factor we want on th
 ### Guardrails for implementers
 
 1. Sequencing lives in the Workflow, not in the UI.
-2. Status is derived, not a `TRANSITIONS` table `[D3]`.
+2. Status is set in one place, by the Workflow's happy path. No `TRANSITIONS` table `[D3]`.
 3. All I/O is an Activity. LLM client retries stay off `[E1]`.
 4. Agents and tools are the classes in §5 — do not add layers.
 5. Mock Splunk is read-only plus fixtures. Mock SOAR owns submit idempotency.
