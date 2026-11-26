@@ -1,4 +1,4 @@
-"""The five tools agents can call. Each is a small class: a name, a JSON schema the model sees,
+"""The seven tools agents can call. Each is a small class: a name, a JSON schema the model sees,
 and `run()`, which queries Mock Splunk. `activities.run_tool` is the only caller, so every tool
 call is a retried, recorded Activity."""
 
@@ -62,7 +62,27 @@ class LookupMitre(Tool):
     params = {"behaviour": "Short description of the behaviour"}
 
 
+class SearchLogins(Tool):
+    name = "search_logins"
+    description = "Splunk login events for a host and user over the last N days."
+    params = {"host": "Hostname", "user": "Username", "days": "How many days back"}
+
+
+class LookupExemptions(Tool):
+    name = "lookup_exemptions"
+    description = "Exemption tickets (approved out-of-policy use) for a user in a time window."
+    params = {"user": "Username", "window": "e.g. this week"}
+
+
 TOOLS: dict[str, Tool] = {
     t.name: t
-    for t in (ListAlertEvidence(), SearchEvidence(), LookupAsset(), EnrichIoc(), LookupMitre())
+    for t in (
+        ListAlertEvidence(),
+        SearchEvidence(),
+        LookupAsset(),
+        EnrichIoc(),
+        LookupMitre(),
+        SearchLogins(),
+        LookupExemptions(),
+    )
 }

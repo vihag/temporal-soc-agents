@@ -1,0 +1,25 @@
+{
+  "alert": {},
+  "tools": {
+    "search_logins": {"ref": "EV-logins", "window_days": 7, "summary": "{user} logged in to {host} 41 times in 7 days: 38 from the office VPN, 3 from 185.220.101.7 (Tor) at 02:10-02:40 on Tue and Wed"},
+    "lookup_exemptions": {"ref": "EV-exemptions", "summary": "Exemption tickets this week for {user}: none open. Last exemption (SEC-EX-4411, admin tooling) expired 12 days ago"}
+  },
+  "ask": {
+    "login": [
+      {"tool": "search_logins", "args": {"host": "{host}", "user": "{user}", "days": "7"}},
+      {"final": {"answer": "7 more days of logins for {host}: 3 off-hours sessions from a Tor exit node, all on {user}.",
+                 "findings": [{"statement": "{user} had 3 off-hours logins to {host} from Tor in the last 7 days", "evidence_refs": ["EV-logins"], "confidence": 0.8}]}}
+    ],
+    "exemption": [
+      {"tool": "lookup_exemptions", "args": {"user": "{user}", "window": "this week"}},
+      {"final": {"answer": "No open exemption covers {user} this week; the last one expired 12 days ago.",
+                 "findings": [{"statement": "No exemption ticket covers {user}'s activity this week", "evidence_refs": ["EV-exemptions"], "confidence": 0.9}]}}
+    ],
+    "default": [
+      {"tool": "search_logins", "args": {"host": "{host}", "user": "{user}", "days": "7"}},
+      {"tool": "lookup_exemptions", "args": {"user": "{user}", "window": "this week"}},
+      {"final": {"answer": "Checked recent logins and exemptions for {user} on {host}: off-hours Tor logins and no exemption on file.",
+                 "findings": [{"statement": "Off-hours Tor logins for {user} with no exemption on file", "evidence_refs": ["EV-logins", "EV-exemptions"], "confidence": 0.75}]}}
+    ]
+  }
+}

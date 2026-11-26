@@ -69,3 +69,27 @@ Intake: start, duplicate no-op, and a queue outage that drains on recovery. Cont
 ## 6. Out of scope for this slice (next discussion)
 
 Schedules, search attributes / visibility queries for the queue, Worker Versioning / patching, Nexus, multi-namespace, Temporal Cloud deployment, auth/RBAC, Codec Server / payload encryption, metrics/OTel.
+
+## 7. As built (deviations and notes)
+
+- **Queue outage semantics**: only consumers fail (`receive`/`delete`). `send` and depth stay up (`always_up`), so producers keep enqueueing and the console shows the backlog building. Nothing is lost; intake drains on recovery.
+- **Ask** returns to the UI once the Update is *accepted* (`start_update(..., wait_for_stage=ACCEPTED)`). The child's answer lands on the case timeline. `run()` waits for `all_handlers_finished`, so a decision taken while the agent is still working never drops its answer.
+- **Deciding while parked** is allowed (the park wait also ends on a decision). The approval SLA does not run while parked.
+- **Tests**: time-skipping skips retry backoff, so outage tests use `fail_next` (fail exactly N requests) instead of wall-clock outages. The endless intake loop runs on its own throwaway test server, so its timers cannot interfere with the other tests.
+- **Size**: `src/soc` is 2,222 lines and `services/` 335 (2,557 total, 2,099 non-blank), excluding tests (≈620) and the UI (≈340).
+
+## 8. Still missing for a Temporal-complete solution (next discussion)
+
+| Gap | What it would add here |
+| --- | --- |
+| **Schedules** | Replace the intake poll loop with a Schedule or an SQS push → Signal-with-Start; nightly re-triage of stale cases; SLA reports. |
+| **Search attributes / Visibility** | `Assignee`, `CaseStatus`, `Severity` as custom search attributes, so the queue and *My cases* are Visibility queries instead of N Queries (scales past ~60 cases). |
+| **Worker Versioning / patching** | Ship workflow changes without breaking in-flight cases (`workflow.patched`, or Worker Deployment versions with pinned/auto-upgrade). |
+| **Continue-as-new for long cases** | Cases parked for days with many asks could grow history; CAN at a threshold, carrying `Case`. |
+| **Nexus** | Expose "open case" / "ask agent" as Nexus operations to other teams' namespaces (e.g. IT, HR) with a clean contract. |
+| **Multi-namespace / multi-region** | Per-tenant or per-region namespaces; HA namespaces on Cloud. |
+| **Temporal Cloud** | mTLS/API keys, metrics endpoint, SSO/RBAC; the code already connects via env config. |
+| **Data protection** | Codec Server / payload encryption for alert contents and model prompts. |
+| **Observability** | SDK metrics + OpenTelemetry tracing across Workflow → Activity → model. |
+| **Rate limiting at the source** | Task-queue rate limits / a separate task queue for model calls with `max_concurrent_activities`, instead of relying on 429 retries. |
+| **Auth** | Real analyst identity (the switcher is a demo stand-in); validators already enforce the assignee. |

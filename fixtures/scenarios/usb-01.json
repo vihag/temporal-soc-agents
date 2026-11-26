@@ -1,0 +1,29 @@
+{
+  "extends": "hitl-confirm-01",
+  "alert": {
+    "alert_id": "SPL-2026-0301", "title": "4.2 GB copied to unapproved USB device",
+    "severity": "high", "host": "eng-lt-117", "user": "r.lim", "privileged_account": false, "crown_jewel": true,
+    "raw": {"rule": "DLP-USB-BULK", "device": "SanDisk 3.2Gen1"}
+  },
+  "tools": {
+    "list_alert_evidence": {"ref": "EV-alert", "summary": "Bulk copy of /src/firmware to removable media at 18:52"},
+    "search_evidence": {"ref": "EV-spl-1", "summary": "r.lim submitted resignation 3 days ago (HR feed); copy happened after hours"},
+    "lookup_asset": {"ref": "EV-asset", "summary": "eng-lt-117 holds firmware source (crown jewel)"},
+    "enrich_ioc": {"ref": "EV-ioc", "summary": "Device serial never seen in the fleet"},
+    "lookup_mitre": {"ref": "EV-mitre", "summary": "T1052.001 Exfiltration over USB"}
+  },
+  "llm": {
+    "triage": [{"final": {"severity": "high", "verdict": "true_positive", "confidence": 0.82,
+                          "rationale": "Bulk copy of crown-jewel source to an unknown USB device."}}],
+    "evidence": [
+      {"tool": "search_evidence", "args": {"query": "user=r.lim"}},
+      {"final": {"findings": [{"statement": "Copy happened after hours, 3 days after r.lim resigned", "evidence_refs": ["EV-spl-1"], "confidence": 0.85}]}}
+    ],
+    "threat": [
+      {"tool": "lookup_mitre", "args": {"behaviour": "usb bulk copy"}},
+      {"final": {"findings": [{"statement": "Matches T1052.001 exfiltration over USB", "evidence_refs": ["EV-mitre"], "confidence": 0.8}]}}
+    ],
+    "disposition": [{"final": {"action": "disable_account", "cited_findings": [0, 1],
+                               "rationale": "Insider exfiltration risk: disable r.lim, recover the device, notify Legal."}}]
+  }
+}

@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Any
 
 
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Override wins; nested dicts are merged one level deep."""
+    merged = dict(base)
+    for key, value in override.items():
+        both_dicts = isinstance(value, dict) and isinstance(base.get(key), dict)
+        merged[key] = {**base[key], **value} if both_dicts else value
+    return merged
+
+
 @dataclass
 class Scenario:
     name: str
@@ -16,15 +25,15 @@ class Scenario:
 
     @classmethod
     def load(cls, name: str, fixtures_dir: Path) -> Scenario:
-        """Load `<name>.json`. `"extends": "<other>"` reuses another file and overrides its keys,
-        so a variant (a timeout, a flaky tool) is a few lines instead of a copy."""
+        """Load `<name>.json` on top of `_base.json` (shared tools and ask-agent answers).
+
+        `"extends": "<other>"` reuses another scenario and overrides its keys, so a variant
+        (a timeout, a flaky tool) is a few lines instead of a copy."""
         data = json.loads((fixtures_dir / f"{name}.json").read_text())
         if base := data.pop("extends", None):
-            merged = cls.load(base, fixtures_dir).data
-            for key, value in data.items():
-                is_dict = isinstance(value, dict) and isinstance(merged.get(key), dict)
-                merged[key] = {**merged[key], **value} if is_dict else value
-            data = merged
+            data = _merge(cls.load(base, fixtures_dir).data, data)
+        elif name != "_base":
+            data = _merge(cls.load("_base", fixtures_dir).data, data)
         return cls(name, data)
 
     @property
@@ -36,8 +45,16 @@ class Scenario:
         script = self.data["llm"][agent]
         return dict(script[min(step, len(script) - 1)])
 
-    def tool_result(self, tool: str) -> dict[str, Any]:
-        return dict(self.data["tools"][tool])
+    def tool_result(self, tool: str) -> dict[str, Any] | None:
+        result = self.data.get("tools", {}).get(tool)
+        return self.render(result) if result is not None else None
+
+    def render(self, value: Any) -> Any:
+        """Fill {host} / {user} / {alert_id} placeholders from this scenario's alert."""
+        text = json.dumps(value)
+        for key in ("host", "user", "alert_id"):
+            text = text.replace("{" + key + "}", str(self.data["alert"].get(key, "")))
+        return json.loads(text)
 
     def fault(self, activity: str) -> int | str:
         """How many attempts of `activity` should fail (or "fatal"). 0 = healthy."""

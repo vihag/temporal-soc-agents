@@ -64,3 +64,20 @@ Child Workflows, a LiteLLM layer, a dynamic tool plugin registry, a rebuilt Case
 ## How to use the IDs
 
 Cite them in contracts, PR descriptions, and `DEMO.md`. If a feature has no must-row, it is outside the cut unless a should-row is pulled forward on purpose.
+
+## v2: SOC console slice (DESIGN-v2.md)
+
+| ID | Primitive | Where in code | Test (time-skipping) | Demo moment |
+| --- | --- | --- | --- | --- |
+| V1 | Queue intake as a long-running Workflow; child Workflow per alert, `ParentClosePolicy.ABANDON` | `src/soc/intake.py` `IntakeWorkflow._open_case` | `test_v2.py::test_intake_round_robin_duplicate_and_queue_outage` | Runbook step 1 |
+| V2 | Duplicate alert = no-op via Workflow-id uniqueness (`REJECT_DUPLICATE`, `WorkflowAlreadyStartedError`) | `intake.py` | same test (`duplicates == 1`) | Intake: *Duplicates ignored* |
+| V3 | Queue outage: unlimited-retry Activity, producers keep enqueueing, drained on recovery | `activities.receive_alerts`, `services/mock_queue.py` (`always_up`) | same test (`attempt > 1`, queue empty) | Chaos *Queue down* |
+| V4 | Continue-as-new carrying state (round-robin pointer, counters) | `IntakeWorkflow.run` | `test_intake_continues_as_new_and_keeps_counters` | Temporal UI: `alert-intake` runs |
+| V5 | Roster and round-robin auto-assign | `models.ROSTER`, `intake.py` | intake test (`vihag, aisha, ben`) | Runbook step 2 |
+| V6 | `reassign` Update + validator; the new analyst continues at the same step | `workflow.py` `reassign` | `test_reassign_moves_the_case_to_the_new_analyst`, `test_api.py::test_actions_go_through_update_validators` | Step 5 |
+| V7 | Park/snooze: durable timer (`timeout_summary="park timer"`), SLA paused, auto-resume or `unpark` Update | `workflow.py` `_stay_parked`, `park`, `unpark` | `test_park_timer_resumes_and_sla_does_not_run_while_parked` | Step 6 |
+| V8 | Ask-an-agent: Update → child `AskAgentWorkflow` → agent loop with tools incl. `lookup_exemptions` | `workflow.py` `ask`, `AskAgentWorkflow`; `agents.InvestigatorAgent`; `tools.LookupExemptions` | `test_ask_agent_runs_as_child_and_attaches_findings` | Step 7 |
+| V9 | Model outage heals by retry (503, 429 with Retry-After → `next_retry_delay`) | `llm.GrokClient`, `activities.OPTIONS` | `test_model_outage_heals`, `test_agents.py` | Chaos *Grok 503/429* |
+| V10 | Worker crash and replay | `worker.WorkerSupervisor.down_for` | `test_workflow.py` restart test | Chaos *Kill worker* |
+| V11 | `wait_condition(all_handlers_finished)` before completing (no lost Update results) | `CaseInvestigationWorkflow.run` | ask test (approve while the child runs) | — |
+| V12 | Chaos panel (UI + CLI) via the mocks' `/admin/outage` switch | `src/soc/chaos.py`, `services/common.py`, `api.chaos` | `test_model_outage_heals` (`fail_next`) | Chaos bar |

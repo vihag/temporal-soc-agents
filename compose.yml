@@ -1,6 +1,7 @@
 # One command: docker compose up --build   ->  case UI :8080, Temporal UI :8233
 # Each service is one small process, so the moving parts are visible: the Temporal server, the
-# worker (all Workflow + Activity code), the analyst API/UI (a stateless client), two mocks.
+# worker (all Workflow + Activity code, incl. the intake loop), the analyst API/UI (a stateless
+# client) and four mocks: Splunk, SOAR, Grok (recorded replies) and the alert queue (SQS-like).
 x-app: &app
   build: .
   env_file: .env
@@ -8,6 +9,8 @@ x-app: &app
     TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}
     SPLUNK_URL: http://mock-splunk:8001
     SOAR_URL: http://mock-soar:8002
+    MOCK_GROK_URL: http://mock-grok:8003/v1
+    QUEUE_URL: http://mock-queue:8004
     MOCK_HOST: 0.0.0.0
 
 services:
@@ -28,16 +31,25 @@ services:
     <<: *app
     command: ["python", "-m", "services.mock_soar"]
 
+  mock-grok:
+    <<: *app
+    command: ["python", "-m", "services.mock_grok"]
+
+  mock-queue:
+    <<: *app
+    command: ["python", "-m", "services.mock_queue"]
+
   worker:
     <<: *app
     command: ["python", "-m", "soc", "worker"]
     depends_on:
       temporal: {condition: service_healthy, required: false}
     restart: unless-stopped  # `docker compose kill worker` + `start worker` is the crash demo
+    # (the in-UI "Kill worker" chaos button needs `python -m soc api --with-worker` instead)
 
   analyst-api:
     <<: *app
-    command: ["python", "-m", "soc", "api"]
+    command: ["python", "-m", "soc", "api"]  # a client only: no worker in this container
     environment:
       <<: *env
       API_HOST: 0.0.0.0

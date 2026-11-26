@@ -16,7 +16,17 @@ from typing import Any, ClassVar
 from temporalio.exceptions import ApplicationError
 
 from soc.activities import call, llm_create, run_tool
-from soc.models import Alert, Case, Disposition, Evidence, Finding, LLMRequest, ToolCall, Triage
+from soc.models import (
+    Alert,
+    AskResult,
+    Case,
+    Disposition,
+    Evidence,
+    Finding,
+    LLMRequest,
+    ToolCall,
+    Triage,
+)
 
 
 class Agent:
@@ -107,3 +117,18 @@ class DispositionAgent(Agent):
         findings = [f"[{i}] {f.statement}" for i, f in enumerate(case.findings)]
         answer, _ = await self._converse("Findings:\n" + "\n".join(findings))
         return Disposition(answer["action"], answer["rationale"], answer["cited_findings"])
+
+
+class InvestigatorAgent(Agent):
+    """Answers an analyst's follow-up question (runs inside AskAgentWorkflow)."""
+
+    name = "ask"
+    instructions = "Answer the SOC analyst's question about this case using your tools."
+    tools = ("search_logins", "lookup_exemptions", "search_evidence", "lookup_asset", "enrich_ioc")
+    loops = True
+    answer_keys = ["answer", "findings"]
+
+    async def run(self, alert: Alert, question: str) -> AskResult:
+        prompt = f"Case alert: {json.dumps(asdict(alert))}\nAnalyst question: {question}"
+        answer, evidence = await self._converse(prompt)
+        return AskResult(answer["answer"], evidence, self._findings(answer))
