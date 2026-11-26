@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +21,10 @@ class MockServer(ThreadingHTTPServer):
     outage_until: float = 0.0
     outage_code: int = 503
     fail_next: int = 0  # tests: fail exactly this many requests (time-skipping ignores clocks)
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if not isinstance(sys.exc_info()[1], ConnectionError):  # a killed worker hung up: fine
+            super().handle_error(request, client_address)
 
 
 class JsonHandler(BaseHTTPRequestHandler):
