@@ -17,7 +17,7 @@ from services.mock_queue import queue_server
 from services.mock_soar import soar_server
 from services.mock_splunk import splunk_server
 from soc.settings import Settings
-from soc.worker import build_worker
+from soc.worker import SocWorker
 
 
 def _free_port() -> int:
@@ -26,32 +26,22 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="session")
-def soar():
-    server = serve_in_thread(soar_server(_free_port()))
-    yield server
-    server.shutdown()
+def _mock_service(name: str, make_server):
+    """A session-scoped fixture that runs one mock service on a free port."""
+
+    @pytest.fixture(scope="session", name=name)
+    def service():
+        server = serve_in_thread(make_server(_free_port()))
+        yield server
+        server.shutdown()
+
+    return service
 
 
-@pytest.fixture(scope="session")
-def splunk():
-    server = serve_in_thread(splunk_server(_free_port()))
-    yield server
-    server.shutdown()
-
-
-@pytest.fixture(scope="session")
-def grok():
-    server = serve_in_thread(grok_server(_free_port()))
-    yield server
-    server.shutdown()
-
-
-@pytest.fixture(scope="session")
-def queue():
-    server = serve_in_thread(queue_server(_free_port()))
-    yield server
-    server.shutdown()
+soar = _mock_service("soar", soar_server)
+splunk = _mock_service("splunk", splunk_server)
+grok = _mock_service("grok", grok_server)
+queue = _mock_service("queue", queue_server)
 
 
 @pytest.fixture(scope="session")
@@ -70,5 +60,5 @@ def settings(soar, splunk, grok, queue) -> Settings:
 @pytest_asyncio.fixture(scope="session")
 async def env(settings) -> AsyncIterator[WorkflowEnvironment]:
     async with await WorkflowEnvironment.start_time_skipping() as env:  # noqa: SIM117
-        async with build_worker(env.client, settings.task_queue):  # needs env.client
+        async with SocWorker(env.client, settings.task_queue):  # needs env.client
             yield env

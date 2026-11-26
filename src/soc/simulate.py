@@ -10,10 +10,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import WorkflowIDConflictPolicy
 
+from soc.history import HistoryBars
 from soc.models import Case, CaseInput, DecisionRequest, Status
 from soc.scenarios import Scenario
 from soc.settings import Settings
@@ -86,31 +86,23 @@ class Narrator:
             self.out(f"  {local}  {entry.status:<20} {entry.note}")
         self.seen = len(case.timeline)
 
-    async def temporal(self, handle: WorkflowHandle) -> None:
-        names: dict[int, str] = {}
-        ran: Counter[str] = Counter()
-        lines, total = [], 0
-        async for e in handle.fetch_history_events():
-            total += 1
-            if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
-                names[e.event_id] = e.activity_task_scheduled_event_attributes.activity_type.name
-                ran[names[e.event_id]] += 1
-            elif e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED:
-                a = e.activity_task_started_event_attributes
-                if a.attempt > 1:
-                    name = names[a.scheduled_event_id]
-                    lines.append(
-                        f"retried {name}: succeeded on attempt {a.attempt} "
-                        f"(last error: {a.last_failure.message})"
-                    )
-            elif e.event_type == EventType.EVENT_TYPE_TIMER_FIRED:
-                lines.append("durable approval timer fired (no worker thread was held)")
-            elif e.event_type == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
-                lines.append("Update `decide` passed its validator and was recorded")
-        self.out(f"  What Temporal did ({total} history events, workflow {handle.id}):")
+    async def temporal(self, client: Client, handle: WorkflowHandle) -> None:
+        """What Temporal did, read from the same history bars the console draws."""
+        events = [e async for e in handle.fetch_history_events()]
+        bars = await HistoryBars(client).build(events)
+        ran = Counter(b["name"] for b in bars if "name" in b)
+        self.out(f"  What Temporal did ({len(events)} history events, workflow {handle.id}):")
         self.out("    activities: " + ", ".join(f"{n} x{c}" for n, c in ran.items()))
-        for line in lines:
-            self.out(f"    {line}")
+        for bar in bars:
+            if bar.get("attempt", 1) > 1:
+                self.out(
+                    f"    retried {bar['name']}: succeeded on attempt {bar['attempt']} "
+                    f"(last error: {bar['error']})"
+                )
+            elif bar["kind"] == "timer" and bar.get("fired"):
+                self.out("    durable approval timer fired (no worker thread was held)")
+            elif bar["kind"] == "update":
+                self.out(f"    Update `{bar['label']}` passed its validator and was recorded")
 
 
 async def run_simulation(
@@ -156,5 +148,5 @@ async def run_simulation(
         )
     case = await handle.result()
     narrator.case(case)
-    await narrator.temporal(handle)
+    await narrator.temporal(client, handle)
     return case

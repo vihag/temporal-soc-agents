@@ -11,7 +11,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
-import httpx
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
@@ -30,8 +29,9 @@ from soc.models import (
 )
 from soc.scenarios import Scenario
 from soc.settings import Settings
-from soc.soar import HttpSoarClient
+from soc.soar import submit_ticket
 from soc.tools import TOOLS
+from soc.upstream import request_json
 from soc.visibility import ASSIGNEE, CASE_STATUS
 
 T = TypeVar("T")
@@ -54,10 +54,9 @@ def _maybe_fail(scenario: Scenario, name: str) -> None:
 async def fetch_alert(inp: CaseInput) -> Alert:
     _maybe_fail(_scenario(inp.scenario), "fetch_alert")
     params = {"scenario": inp.scenario, "alert_id": inp.alert_id}
-    async with httpx.AsyncClient(base_url=Settings.from_env().splunk_url, timeout=10) as http:
-        response = await http.get("/v1/alert", params=params)
-    response.raise_for_status()
-    return Alert(**response.json())
+    return Alert(
+        **await request_json("GET", Settings.from_env().splunk_url, "/v1/alert", params=params)
+    )
 
 
 @activity.defn
@@ -108,8 +107,9 @@ async def soar_submit(request: SoarSubmit) -> SoarReceipt:
     The injected fault fires *after* the ticket is filed, as if the response were lost. The retry
     then gets the same ticket back with created=False instead of filing a second one.
     """
-    soar = HttpSoarClient(Settings.from_env().soar_url)
-    receipt = await soar.submit(request.case_id, request.action, request.approver)
+    receipt = await submit_ticket(
+        Settings.from_env().soar_url, request.case_id, request.action, request.approver
+    )
     _maybe_fail(_scenario(request.scenario), "soar_submit")
     return receipt
 
@@ -118,19 +118,18 @@ async def soar_submit(request: SoarSubmit) -> SoarReceipt:
 async def receive_alerts(max_messages: int) -> list[QueueMessage]:
     """Long-poll the alert queue. While the queue is down this fails and Temporal keeps
     retrying (no attempt limit): alerts wait safely in the queue until it recovers."""
-    async with httpx.AsyncClient(base_url=Settings.from_env().queue_url, timeout=10) as http:
-        response = await http.post("/v1/receive", json={"max": max_messages})
-    response.raise_for_status()
-    return [QueueMessage(**m) for m in response.json()]
+    queue_url = Settings.from_env().queue_url
+    messages = await request_json("POST", queue_url, "/v1/receive", json={"max": max_messages})
+    return [QueueMessage(**m) for m in messages]
 
 
 @activity.defn
 async def ack_alerts(receipts: list[str]) -> None:
     """Delete messages only after their cases exist, so a crash in between means redelivery,
     and redelivery is a harmless duplicate (case IDs are unique)."""
-    async with httpx.AsyncClient(base_url=Settings.from_env().queue_url, timeout=10) as http:
-        response = await http.post("/v1/delete", json={"receipts": receipts})
-    response.raise_for_status()
+    await request_json(
+        "POST", Settings.from_env().queue_url, "/v1/delete", json={"receipts": receipts}
+    )
 
 
 @activity.defn

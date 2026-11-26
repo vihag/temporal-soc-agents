@@ -11,15 +11,16 @@ from temporalio.client import Client
 
 from soc import api
 from soc.codec import ENCODING, EncryptionCodec, data_converter
+from soc.history import HistoryBars
 from soc.models import CaseInput, Status
-from soc.worker import build_worker
+from soc.worker import SocWorker
 from soc.workflow import CaseInvestigationWorkflow
 
 
 async def test_history_holds_ciphertext_and_the_console_decrypts(env, settings):
     codec = EncryptionCodec(os.urandom(32))
     secure = Client(env.client.service_client, data_converter=data_converter(codec))
-    async with build_worker(secure, "codec-q"):
+    async with SocWorker(secure, "codec-q"):
         handle = await secure.start_workflow(
             CaseInvestigationWorkflow.run,
             CaseInput("auto-fp-01"),
@@ -32,7 +33,7 @@ async def test_history_holds_ciphertext_and_the_console_decrypts(env, settings):
     stored = raw[0].workflow_execution_started_event_attributes.input.payloads[0]
     assert stored.metadata["encoding"] == ENCODING and b"auto-fp-01" not in stored.data
 
-    bars = await api.HistoryBars(secure).build(raw)  # the console holds the key
+    bars = await HistoryBars(secure).build(raw)  # the console holds the key
     fetch = next(b for b in bars if b.get("name") == "fetch_alert")
     assert fetch["input"]["scenario"] == "auto-fp-01"
 

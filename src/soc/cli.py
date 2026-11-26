@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import urllib.request
 from typing import Any
 
@@ -28,11 +27,11 @@ from temporalio.client import WorkflowUpdateFailedError
 from temporalio.service import RPCError
 
 from soc.chaos import Chaos
-from soc.models import AskRequest, Case, CaseInput, DecisionRequest, ParkRequest, ReassignRequest
+from soc.models import AskRequest, Case, DecisionRequest, ParkRequest, ReassignRequest
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
-from soc.worker import build_worker, run_worker
+from soc.worker import SocWorker, quiet_expected_faults, run_worker
 from soc.workflow import CaseInvestigationWorkflow
 
 
@@ -73,16 +72,11 @@ def ensure_mocks(settings: Settings) -> None:
 async def start(scenario: str) -> None:
     settings = Settings.from_env()
     alert_id = Scenario.load(scenario, settings.fixtures_dir).alert["alert_id"]
-    inp = CaseInput(
-        scenario,
-        settings.enable_threat,
-        settings.approval_timeout_s,
-        settings.max_agent_steps,
-        indexed=settings.search_attributes,
-    )
-    client = await connect()
-    handle = await client.start_workflow(
-        CaseInvestigationWorkflow.run, inp, id=f"case-{alert_id}", task_queue=settings.task_queue
+    handle = await (await connect()).start_workflow(
+        CaseInvestigationWorkflow.run,
+        settings.case_input(scenario),
+        id=f"case-{alert_id}",
+        task_queue=settings.task_queue,
     )
     print(f"Started {handle.id}. View: python -m soc view {handle.id}")
 
@@ -127,11 +121,10 @@ async def grok_smoke() -> int:
 async def simulate(names: list[str]) -> None:
     """Run scenarios end to end with an in-process worker and (if needed) the mock services."""
     settings = Settings.from_env()
-    logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # injected faults are expected
-    logging.getLogger("temporalio.worker").setLevel(logging.ERROR)
+    quiet_expected_faults()
     ensure_mocks(settings)
     client = await connect()
-    async with build_worker(client, settings.task_queue):
+    async with SocWorker(client, settings.task_queue):
         for name in names:
             sim = SIMULATIONS[name]
             print(f"\n=== {sim.name}: {sim.story}")
@@ -196,38 +189,40 @@ def main() -> None:
         parser.error(f"unknown simulation(s): {', '.join(sorted(unknown))}")
 
     match args.cmd:
-        case "worker":
-            asyncio.run(run_worker())
         case "api":
             from soc.api import serve
 
-            serve(args.with_worker)
-        case "grok-smoke":
-            raise SystemExit(asyncio.run(grok_smoke()))
-        case "seed":
-            asyncio.run(seed())
-        case "chaos":
-            asyncio.run(chaos(args.target, args.seconds))
-        case "start":
-            asyncio.run(start(args.scenario))
-        case "view":
-            asyncio.run(view(args.workflow_id))
-        case "decide":
-            req = DecisionRequest(args.decision, args.analyst, args.rationale)  # type: ignore[arg-type]
-            asyncio.run(update(args.workflow_id, "decide", req))
-        case "reassign":
-            req2 = ReassignRequest(args.to, args.by, args.reason)
-            asyncio.run(update(args.workflow_id, "reassign", req2))
-        case "park":
-            asyncio.run(update(args.workflow_id, "park", ParkRequest(args.seconds, args.analyst)))
-        case "unpark":
-            asyncio.run(update(args.workflow_id, "unpark", args.analyst))
-        case "ask":
-            asyncio.run(update(args.workflow_id, "ask", AskRequest(args.question, args.analyst)))
+            return serve(args.with_worker)
         case "demo":
             from soc.director import Director
 
             director = Director(args.api, fast=args.fast)
-            asyncio.run(director.run(Director.load(args.runbook)))
+            coro = director.run(Director.load(args.runbook))
+        case "grok-smoke":
+            raise SystemExit(asyncio.run(grok_smoke()))
+        case "worker":
+            coro = run_worker()
+        case "seed":
+            coro = seed()
+        case "chaos":
+            coro = chaos(args.target, args.seconds)
+        case "start":
+            coro = start(args.scenario)
+        case "view":
+            coro = view(args.workflow_id)
+        case "decide":
+            req = DecisionRequest(args.decision, args.analyst, args.rationale)  # type: ignore[arg-type]
+            coro = update(args.workflow_id, "decide", req)
+        case "reassign":
+            coro = update(
+                args.workflow_id, "reassign", ReassignRequest(args.to, args.by, args.reason)
+            )
+        case "park":
+            coro = update(args.workflow_id, "park", ParkRequest(args.seconds, args.analyst))
+        case "unpark":
+            coro = update(args.workflow_id, "unpark", args.analyst)
+        case "ask":
+            coro = update(args.workflow_id, "ask", AskRequest(args.question, args.analyst))
         case "simulate":
-            asyncio.run(simulate(list(SIMULATIONS) if args.all or not args.names else args.names))
+            coro = simulate(list(SIMULATIONS) if args.all or not args.names else args.names)
+    asyncio.run(coro)

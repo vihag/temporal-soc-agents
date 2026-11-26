@@ -6,9 +6,8 @@ happens next is all Temporal: Activities retry with backoff, Workflows wait, not
 
 from __future__ import annotations
 
-import httpx
-
 from soc.settings import Settings
+from soc.upstream import request_json
 
 # Eight alerts for the runbook (alert id = f"{prefix}-{suffix}"). The last repeats the first:
 # intake will show it as a duplicate.
@@ -36,11 +35,8 @@ class Chaos:
 
     async def outage(self, target: str, seconds: float, code: int = 503) -> str:
         """`code=429` makes Grok rate-limit (with Retry-After) instead of failing."""
-        async with httpx.AsyncClient(timeout=5) as http:
-            response = await http.post(
-                f"{self.targets[target]}/admin/outage", json={"seconds": seconds, "code": code}
-            )
-        response.raise_for_status()
+        body = {"seconds": seconds, "code": code}
+        await request_json("POST", self.targets[target], "/admin/outage", timeout=5, json=body)
         return f"{target} returns {code} for {seconds:g}s"
 
     async def push(self, alert_id: str, scenario: str, approval_timeout_s: int = 120) -> None:
@@ -49,8 +45,7 @@ class Chaos:
             "scenario": scenario,
             "approval_timeout_s": approval_timeout_s,
         }
-        async with httpx.AsyncClient(timeout=5) as http:
-            (await http.post(f"{self.queue_url}/v1/send", json=body)).raise_for_status()
+        await request_json("POST", self.queue_url, "/v1/send", timeout=5, json=body)
 
     async def seed(self, prefix: str = "SPL-2026") -> int:
         for suffix, scenario in SEED:

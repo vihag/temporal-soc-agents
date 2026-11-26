@@ -7,13 +7,14 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from helpers import attempts_of, play
 from temporalio.api.enums.v1 import EventType
 from temporalio.exceptions import ApplicationError
 
 from soc.llm import GrokClient
 from soc.models import CaseInput, LLMRequest, Status
 from soc.settings import Settings
-from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.simulate import SIMULATIONS
 from soc.workflow import CaseInvestigationWorkflow
 
 
@@ -30,18 +31,14 @@ async def test_llm_self_heal(env, settings):
         task_queue=settings.task_queue,
     )
     assert case.status == Status.AUTO_RESOLVED
-    attempts = [
-        e.activity_task_started_event_attributes.attempt
-        for e in await _history(env, case.case_id)
-        if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED
-    ]
+    attempts = await attempts_of(env.client.get_workflow_handle(case.case_id), "llm_create")
     assert 3 in attempts
 
 
 async def test_evidence_loop_uses_tools(env, settings, splunk):
     before = dict(splunk.hits)
     sim = SIMULATIONS["approve_to_submitted"]
-    case = await run_simulation(env.client, sim, settings, env.sleep, Narrator(lambda _: None))
+    case = await play(env, settings, sim)
     used = {e.source for e in case.evidence if e.agent == "evidence"}
     assert {"search_evidence", "lookup_asset"} <= used
     assert splunk.hits["search_evidence"] > before.get("search_evidence", 0)  # real HTTP call
@@ -52,7 +49,7 @@ async def test_parallel_agents(env, settings):
     """Evidence and Threat start in the same Workflow Task: two llm_create calls scheduled
     back to back, before either completes."""
     sim = SIMULATIONS["approve_to_submitted"]
-    case = await run_simulation(env.client, sim, settings, env.sleep, Narrator(lambda _: None))
+    case = await play(env, settings, sim)
     agents = {f.agent for f in case.findings}
     assert agents == {"evidence", "threat"}
     kinds = [e.event_type for e in await _history(env, case.case_id)]

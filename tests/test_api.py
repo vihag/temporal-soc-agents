@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import httpx
+from helpers import play
 
 from soc import api
-from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.simulate import SIMULATIONS
 
 
 async def test_history_bars_and_closed_case_decide(env, settings):
     api._client = env.client
     sim = SIMULATIONS["activity_failure_retry"]
-    case = await run_simulation(env.client, sim, settings, env.sleep, Narrator(lambda _: None))
+    case = await play(env, settings, sim)
     transport = httpx.ASGITransport(app=api.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
         bars = (await http.get(f"/api/cases/{case.case_id}/history")).json()["bars"]

@@ -57,15 +57,16 @@ class Director:
     prefix: str = field(default_factory=lambda: f"DEMO-{datetime.now():%H%M%S}")
     say: Callable[[str], None] = print
     http: httpx.AsyncClient = field(init=False)
+    steps: list[Any] = field(init=False, default_factory=list)
 
     async def run(self, runbook: dict[str, Any]) -> None:
-        steps = runbook["steps"]
+        steps = self.steps = runbook["steps"]
         async with httpx.AsyncClient(base_url=self.api, timeout=60) as self.http:
             self.roster = (await self.http.get("/api/meta")).json()["roster"]
             for n, step in enumerate(steps, 1):
                 ((kind, args),) = step.items()
                 self.say(f"[{n}/{len(steps)}] {kind} {args or ''}")
-                await getattr(self, kind)(args or {}, n, len(steps))
+                await getattr(self, kind)(args or {}, n)
             await self.http.post("/api/caption", json={"text": ""})
         self.say(f"Runbook '{runbook.get('name', '')}' passed (cases case-{self.prefix}-*).")
 
@@ -82,29 +83,31 @@ class Director:
 
     # ---- steps: one method per runbook verb ----
 
-    async def caption(self, a: dict[str, Any], n: int, total: int) -> None:
-        await self.http.post("/api/caption", json={"text": a["text"], "step": n, "total": total})
+    async def caption(self, a: dict[str, Any], n: int) -> None:
+        await self.http.post(
+            "/api/caption", json={"text": a["text"], "step": n, "total": len(self.steps)}
+        )
         await self._pause(a.get("pause", 5))
 
-    async def pause(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def pause(self, a: dict[str, Any], n: int) -> None:
         await self._pause(a.get("seconds", 3))
 
-    async def seed(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def seed(self, a: dict[str, Any], n: int) -> None:
         (await self.http.post("/api/seed", json={"prefix": self.prefix})).raise_for_status()
 
-    async def alert(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def alert(self, a: dict[str, Any], n: int) -> None:
         body = {"alert_id": f"{self.prefix}-{a['id']}", "scenario": a["scenario"]}
         body["approval_timeout_s"] = a.get("approval_timeout_s", 120)
         (await self.http.post("/api/alerts", json=body)).raise_for_status()
 
-    async def chaos(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def chaos(self, a: dict[str, Any], n: int) -> None:
         response = await self.http.post("/api/chaos", json=a)
         if response.status_code == 409 and a.get("optional", True):
             self.say(f"  skipped: {response.json()['detail']}")  # e.g. worker in another process
             return
         response.raise_for_status()
 
-    async def wait_until(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def wait_until(self, a: dict[str, Any], n: int) -> None:
         cid, loop = self.case_id(a["case"]), asyncio.get_running_loop()
         deadline = loop.time() + a.get("timeout", 90)
         want = a.get("status")
@@ -118,7 +121,7 @@ class Director:
             await asyncio.sleep(0.5)
         raise RunbookFailed(f"step {n}: {cid} never reached {want or a}")
 
-    async def wait_list(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def wait_list(self, a: dict[str, Any], n: int) -> None:
         """The case shows up in the queue filtered by status/assignee (a Visibility query)."""
         cid = self.case_id(a["case"])
         params: dict[str, str] = {k: str(a[k]) for k in ("status", "assignee") if k in a}
@@ -129,7 +132,7 @@ class Director:
             await asyncio.sleep(0.5)
         raise RunbookFailed(f"step {n}: {cid} not in the queue for {params}")
 
-    async def act(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def act(self, a: dict[str, Any], n: int) -> None:
         cid = self.case_id(a["case"])
         case = (await self.http.get(f"/api/cases/{cid}")).json()
         body = {k: v for k, v in a.items() if k not in ("case", "action", "as", "to", "expect")}
@@ -149,12 +152,12 @@ class Director:
         nxt = self.roster[(self.roster.index(assignee) + 1) % len(self.roster)]
         return {"@assignee": assignee, "@other": others[0], "@next": nxt}.get(who, who)
 
-    async def assert_case(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def assert_case(self, a: dict[str, Any], n: int) -> None:
         case = (await self.http.get(f"/api/cases/{self.case_id(a['case'])}")).json()
         if not holds(dig(case, a["path"]), a):
             raise RunbookFailed(f"step {n}: {a['path']} = {dig(case, a['path'])}, wanted {a}")
 
-    async def assert_history(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def assert_history(self, a: dict[str, Any], n: int) -> None:
         """Some bar on the case's real event history matches kind/label/min_attempt/fired."""
         bars = (await self.http.get(f"/api/cases/{self.case_id(a['case'])}/history")).json()
         if not any(self._bar_matches(b, a) for b in bars["bars"]):
@@ -169,7 +172,7 @@ class Director:
             and bar.get("fired", False) >= a.get("fired", False)
         )
 
-    async def run_report(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def run_report(self, a: dict[str, Any], n: int) -> None:
         """Trigger the shift-report Schedule now, wait for that run, check what it counted."""
         before = ((await self.http.get("/api/report")).json()["latest"] or {}).get("at")
         (await self.http.post("/api/report")).raise_for_status()
@@ -183,7 +186,7 @@ class Director:
             await asyncio.sleep(0.5)
         raise RunbookFailed(f"step {n}: the triggered shift report never finished")
 
-    async def assert_intake(self, a: dict[str, Any], n: int, total: int) -> None:
+    async def assert_intake(self, a: dict[str, Any], n: int) -> None:
         intake = (await self.http.get("/api/intake")).json()
         if not holds(dig(intake, a["path"]), a):
             raise RunbookFailed(f"step {n}: intake {a['path']} = {dig(intake, a['path'])}")
