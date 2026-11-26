@@ -1,56 +1,39 @@
-# Demo script
+# Presenter runbook
 
-About 20 minutes of a 20–30 minute Temporal SA exercise review. The point is how Temporal handles distributed-systems problems, not a tour of SOC features. Deep Temporal detail lives in the case UI's **What Temporal did here** drawers — open them when you want to go down a level, the way the ClickHouse demo opened "SQL + EXPLAIN".
+About 20 minutes of a 20–30 minute Temporal SA review. The story is how Temporal handles distributed-systems problems in a real-feeling SOC console, not a SOC feature tour. Every bar on the right-hand timeline and every *What Temporal did here* link opens a drawer with the real inputs, outputs, errors and code, so you can go down a level whenever you are asked.
 
-Full talking points and the cost/LOC story sit in [`DESIGN.md`](DESIGN.md). Walk the code with [`CODE_TOUR.md`](CODE_TOUR.md).
+## Before the call (5 min)
 
-## Before the call
+```bash
+temporal server start-dev                       # or Temporal Cloud via TEMPORAL_PROFILE
+uv run python -m soc api --with-worker          # console :8080, worker + mocks in-process
+```
 
-- `docker compose up` (or the 3-terminal fallback in the README) is already running.
-- Prefer **Temporal Cloud**, profile `cloud-setup`, namespace `quickstart-vihaggupta.om7xm`, so the UI link in the drawer is the same one the interviewer can be talked through. Local is fine as a backup.
-- Rehearse once on fixtures (`GROK_CLIENT=fixture`). Optionally one live Grok triage if the key is set. Do not soak the API; see the $50 cap in DESIGN.md §11.
-- A second terminal is ready to stop and start the worker (`docker compose restart temporal-worker` or Ctrl-C / rerun).
-- Threat agent: leave **on** if you want the parallelism beat; off if you want a shorter history.
+- Open http://localhost:8080 and http://localhost:8233 (Temporal UI) side by side.
+- Fixture mode (`GROK_CLIENT=fixture`): $0, deterministic. Do not seed yet.
+- Know the cast: analysts **vihag**, **aisha**, **ben** (the switcher, top right; no auth).
+- Optional opener: the **Self demo** tab (`/#demo=activity_failure_retry`): the real `workflow.py` with the live line highlighted, next to the Gantt.
 
-## Script
+## The run (≈ 20 min)
 
-0. **Self demo opener** (2 min, optional). Open `http://localhost:8080/#demo=activity_failure_retry`. On the left, the real `workflow.py`, with the executing line highlighted. On the right, the Gantt built from the real event history: a tool call fails twice, a model answer is garbled, and the SOAR response is lost. Each shows as a red segment, then green. The stepper goes *Workflow runs → Something breaks → It recovers*. Click any bar for its inputs, outputs, error and Activity code.
+| # | Do | Say / point at |
+|---|----|----|
+| 1 | **Seed**: press *Seed 8 alerts* (or `python -m soc seed`). Open **Alert intake**. | Alerts land on an SQS-like queue. `IntakeWorkflow` polls it and starts **one child Workflow per alert, id `case-{alert_id}`**. The 8th alert repeats the 1st: *Duplicates ignored = 1*. Temporal refused a second Workflow with the same id; that is the no-op. Round robin: vihag → aisha → ben. |
+| 2 | **Assign**: back to **Cases**, *All cases*, then sign in as **ben**, *My cases*. | Assignment is Workflow state, set on intake. Filters are by assignee and status. Benign alerts auto-resolved; real ones wait at *DISPOSITION_PROPOSED*. |
+| 3 | **Chaos at step X**: open **⚡ Chaos**, press *Grok 503* (20s), then press *Seed* again or *Alert with 20s approval SLA*. Watch the new case. | Triage `llm_create` turns red-striped: *attempt 2, 3, 4…*. Click the bar: the error, the backoff from `activities.OPTIONS`. The Workflow code never saw the failure. Repeat with *Splunk down*, *Grok 429* (honours Retry-After), *Queue down* (the depth climbs while intake's `receive_alerts` retries; nothing is lost, it drains on recovery). |
+| 4 | **Kill the worker**: *Kill worker* (15s) while a case is investigating. | No worker at all, and the case simply pauses. The new worker replays history and continues at the same step. No Activity re-runs. With Compose: `docker compose kill worker` / `start worker`. |
+| 5 | **Reassign**: as ben, on `SPL-2026-1006` (USB exfil), *Reassign → aisha*. Switch to aisha. | A validated **Update**. The validator refuses the wrong analyst or a closed case, and refusals never reach history. Aisha sees the full timeline and continues at the same step. Try *Approve* as ben: refused, "only the assignee". |
+| 6 | **Park**: as ben, on `SPL-2026-1003` (impossible travel), *Park 1 min*. | A **durable timer** (`park timer` on the Gantt). The approval SLA does not run while parked. It comes back by itself when the timer fires, or with *Unpark now*. Worker restarts do not matter; the timer lives on the server. |
+| 7 | **Ask an agent**: on `SPL-2026-1003`, ask *"Any exemption tickets for this user this week?"* | The Update starts a **child Workflow** `AskAgentWorkflow` (blue bar). It runs an agent loop with tools (`lookup_exemptions`, `search_logins`, …), each an Activity. The answer, evidence and findings attach to the case timeline. |
+| 8 | **Approve**: as vihag on `SPL-2026-1001`, *Approve*. | Update → `soar_submit`. |
+| 9 | **Exactly-once SOAR**: open `SPL-2026-1004` (hitl-flaky): approve it as vihag. | Its SOAR response is lost once. `soar_submit` retries, and SOAR is unique on `case_id`, so the card says *already filed (the retry was harmless)*. One ticket. Click the bar: attempt 2, `created: false`. |
+| 10 | **SLA breach**: the *20s approval SLA* alert from step 3. | The `approval SLA` timer fired → *ESCALATED*, the lead paged. It still waits for the analyst. |
+| 11 | Close in the **Temporal UI**: open any case or `alert-intake`. | The same history. `alert-intake` shows continue-as-new every 100 polls, counters carried over. |
 
-1. **Problem and form factor** (2 min). A Splunk alert has to become a contain / escalate / close decision, with a human gate and a single SOAR ticket. The old system is a state table, bots, and a webhook. This is one Workflow and a small analyst app. Show `diagrams/architecture.png` and `diagrams/case-states.png` if useful, then the live UI queue.
+## Q&A crib
 
-2. **Start a case** (2 min). From the UI or `python -m soc start --scenario hitl-confirm-01`. Open the case. Point at the Workflow ID `case-…` in the Temporal UI (Cloud if you are on the profile).
-
-3. **Happy path and LLM visibility** (3 min). On the case timeline: triage is 1–3 Activities (tool-calling agent, no loop). Evidence (and Threat, if on) is a short loop of `llm_create` and named tools. Open **one** drawer on the triage step: prompt, response, `model_requested` vs `model` returned, link to the same event in Temporal Cloud.
-
-4. **Kill the worker** (3 min). While Evidence is mid-loop (or start a second case and kill during its loop): `docker compose kill worker`. Show the Workflow still open. `docker compose start worker`. Completed LLM and tool Activities are not re-run. Any call that was in flight when the worker died is retried once its 30s StartToClose timeout passes, and it shows as a red retry segment in the Self demo Gantt and the drawer. This is the durable-execution beat.
-
-5. **Human in the loop** (3 min). Back on the first case (or wait for disposition). The detail page shows the proposal and Approve / Reject — not a wall of history. Approve with a short rationale. Show the Update in Temporal UI and the status move to `SUBMITTED`.
-
-6. **Exactly-once SOAR** (3 min). The case now has one `soar_case_id`. Start the same `alert_id` again: `WorkflowAlreadyStartedError`. Mention (or show the test) that a timeout after SOAR has already written the row still returns that same id.
-
-7. **Timer** (2 min, or pre-run pytest if time is tight). A second case, do not approve. After 2 minutes it is `ESCALATED` and still waiting. A late approve still works. In tests this is `pytest tests/test_approval_timeout.py` with time-skipping, not a live 2-minute sit.
-
-8. **If time: self-heal** (1 min). Point at `tests/test_llm_self_heal.py`, or a fixture run that returns bad JSON twice and then a valid triage.
-
-Stop. Leave at least 10 minutes for their Q&A.
-
-## Short answers to keep ready
-
-- **Why is the LLM an Activity?** Workflows must be deterministic. A model call is I/O. Replay must not call Grok again.
-- **Why `max_retries=0` on the client?** So Temporal's retry policy, not the vendor SDK, owns recovery.
-- **Why an Update rather than a Signal for `decide`?** The analyst needs a synchronous yes/no (wrong actor, wrong phase). Signals are fire-and-forget. The cookbook uses a Signal; we upgraded it on purpose.
-- **Why no child Workflows?** Readability. Parallelism is `asyncio.gather` in one history. Child Workflows would add IDs and files a reviewer has to chase in 15 minutes.
-- **How do you scale?** More Workflows, more workers on `soc-case`. A later `soc-llm` queue is a talking point, not this repo.
-- **What did we not build?** Child Workflows, LiteLLM, a tool plugin system, Langfuse, a Case API rebuild.
-
-## Questions to ask them
-
-- How are customers versioning long-lived agent Workflows today (`patched` vs Worker Versioning)?
-- Is Update-based HITL the pattern they want in the AI cookbook (the current recipe uses a Signal)?
-- For Python agents, are they happier with Chat Completions against OpenAI-compatible providers, or with the Responses-API samples as written?
-
-## If something is down
-
-- No Cloud: same script on the local Temporal UI (`http://localhost:8233`).
-- No UI: CLI `start` / `view` / `decide` from the README, and the Temporal UI for history.
-- No Grok key: fixtures only; say so up front. The distributed-systems story does not depend on a live model.
+- **Why a Workflow for intake?** The loop is durable: an outage is just a retrying Activity, duplicates are rejected by Workflow-id uniqueness, and continue-as-new keeps history small.
+- **Update vs Signal?** Update gives the analyst a synchronous answer and a validator that rejects bad requests before they reach history.
+- **Child vs Activity for ask?** The agent loop makes many model and tool calls. As a child it gets its own history and retries, and it is visible as a unit.
+- **Determinism?** All I/O is in Activities. Timers use `workflow.now()`. Replay is tested (`test_replay_is_deterministic`).
+- **What is still missing for a complete Temporal solution?** See DESIGN-v2.md §8.
