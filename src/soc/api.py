@@ -16,9 +16,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
+from google.protobuf import json_format
 from pydantic import BaseModel
+from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
@@ -31,6 +34,7 @@ from temporalio.service import RPCError
 
 from soc import activities, intake, workflow
 from soc.chaos import Chaos
+from soc.codec import EncryptionCodec
 from soc.intake import INTAKE_ID, IntakeWorkflow
 from soc.models import (
     ROSTER,
@@ -50,6 +54,13 @@ from soc.workflow import CaseInvestigationWorkflow
 
 E = EventType
 app = FastAPI(title="SOC case console")
+app.add_middleware(  # lets the Temporal UI (another origin) call /codec
+    CORSMiddleware,
+    allow_origins=os.environ.get("CODEC_CORS_ORIGINS", "http://localhost:8233").split(","),
+    allow_methods=["POST"],
+    allow_headers=["content-type", "x-namespace", "authorization"],
+    allow_credentials=True,
+)
 _client: Client | None = None
 _supervisor: WorkerSupervisor | None = None  # set when the worker runs in this process
 _demo_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -261,6 +272,20 @@ async def intake_stats() -> dict[str, Any]:
     }
 
 
+@app.post("/codec/{op}")
+async def codec_endpoint(op: str, request: Request) -> Response:
+    """Codec server for the Temporal UI/CLI: it posts {"payloads": [...]} and gets the same shape
+    back, encrypted or decrypted. The key never leaves this process."""
+    codec = EncryptionCodec.from_env()
+    if codec is None or op not in ("encode", "decode"):
+        raise HTTPException(404, "set SOC_CODEC_KEY to enable the codec endpoint")
+    payloads = json_format.Parse(await request.body(), Payloads())
+    done = await (codec.encode if op == "encode" else codec.decode)(payloads.payloads)
+    return Response(
+        json_format.MessageToJson(Payloads(payloads=done)), media_type="application/json"
+    )
+
+
 @app.get("/api/report")
 async def report() -> dict[str, Any]:
     """The shift-report Schedule: when it runs next, and what its latest run found."""
@@ -342,7 +367,7 @@ async def history(wf_id: str) -> dict[str, Any]:
     c = await client()
     handle = c.get_workflow_handle(wf_id)
     events = [e async for e in handle.fetch_history_events()]
-    bars = HistoryBars(c).build(events)
+    bars = await HistoryBars(c).build(events)
     desc = await handle.describe()
     by_activity_id = {b.get("activity_id"): b for b in bars}
     for p in desc.raw_description.pending_activities:  # a retry in progress is not in history yet
@@ -365,13 +390,13 @@ class HistoryBars:
     decoded so the drawers can show real inputs and outputs."""
 
     def __init__(self, c: Client) -> None:
-        self.decode = c.data_converter.payload_converter.from_payloads
+        self.converter = c.data_converter  # includes the encryption codec, when one is set
 
-    def _payload(self, payloads: Any) -> Any:
-        values = self.decode(payloads.payloads) if payloads.payloads else []
+    async def _payload(self, payloads: Any) -> Any:
+        values = await self.converter.decode(payloads.payloads) if payloads.payloads else []
         return values[0] if len(values) == 1 else values
 
-    def build(self, events: list[Any]) -> list[dict[str, Any]]:
+    async def build(self, events: list[Any]) -> list[dict[str, Any]]:
         bars: list[dict[str, Any]] = []
         by_id: dict[int, dict[str, Any]] = {}
         for e in events:
@@ -388,7 +413,7 @@ class HistoryBars:
                 bars[0]["end"] = at
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
                 a = e.activity_task_scheduled_event_attributes
-                arg = self._payload(a.input)
+                arg = await self._payload(a.input)
                 by_id[e.event_id] = bar = {
                     "kind": "activity",
                     "name": a.activity_type.name,
@@ -410,7 +435,7 @@ class HistoryBars:
                     }
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
                 a = e.activity_task_completed_event_attributes
-                by_id[a.scheduled_event_id] |= {"end": at, "result": self._payload(a.result)}
+                by_id[a.scheduled_event_id] |= {"end": at, "result": await self._payload(a.result)}
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_FAILED:
                 a = e.activity_task_failed_event_attributes
                 by_id[a.scheduled_event_id] |= {
@@ -422,7 +447,7 @@ class HistoryBars:
                 a = e.timer_started_event_attributes
                 secs = a.start_to_fire_timeout.ToSeconds()
                 meta = e.user_metadata.summary if e.HasField("user_metadata") else None
-                summary = self.decode([meta])[0] if meta and meta.data else ""
+                summary = (await self.converter.decode([meta]))[0] if meta and meta.data else ""
                 by_id[e.event_id] = bar = {
                     "kind": "timer",
                     "label": f"{summary or 'timer'} ({_dur(secs)})",
@@ -436,7 +461,7 @@ class HistoryBars:
                 by_id[e.timer_canceled_event_attributes.started_event_id]["end"] = at
             elif t == E.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
                 request = e.workflow_execution_update_accepted_event_attributes.accepted_request
-                arg = self._payload(request.input.args)
+                arg = await self._payload(request.input.args)
                 label = _update_label(request.input.name, arg)
                 bars.append(
                     {"kind": "update", "label": label, "start": at, "end": at, "input": arg}
@@ -449,7 +474,7 @@ class HistoryBars:
                     "child_id": a.workflow_id,
                     "start": at,
                     "end": None,
-                    "input": self._payload(a.input),
+                    "input": await self._payload(a.input),
                 }
                 bars.append(bar)
             elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED:
@@ -458,7 +483,7 @@ class HistoryBars:
                     by_id[a.initiated_event_id]["end"] = at
             elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
                 a = e.child_workflow_execution_completed_event_attributes
-                by_id[a.initiated_event_id] |= {"end": at, "result": self._payload(a.result)}
+                by_id[a.initiated_event_id] |= {"end": at, "result": await self._payload(a.result)}
             elif t == E.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_FAILED:
                 a = e.start_child_workflow_execution_failed_event_attributes
                 by_id[a.initiated_event_id] |= {

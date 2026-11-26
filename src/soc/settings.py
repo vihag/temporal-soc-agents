@@ -10,6 +10,8 @@ from pathlib import Path
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfigProfile
 
+from soc.codec import data_converter
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -65,4 +67,4 @@ async def connect() -> Client:
     """
     config = ClientConfigProfile.load().to_client_connect_config()
     config.setdefault("target_host", "localhost:7233")
-    return await Client.connect(**config)
+    return await Client.connect(**config, data_converter=data_converter())
