@@ -268,3 +268,20 @@ class RoutingPolicy:
         ):
             return "autonomous"
         return "collaborative"
+
+
+@dataclass
+class ShiftReport:
+    """What the scheduled shift report found (from Visibility, not by querying each case)."""
+
+    at: str = ""
+    total: int = 0
+    by_status: dict[str, int] = field(default_factory=dict)
+    open_by_assignee: dict[str, int] = field(default_factory=dict)
+    escalated: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        load = ", ".join(f"{k} {v}" for k, v in sorted(self.open_by_assignee.items())) or "none"
+        return f"Shift report: {self.total} cases; open by analyst: {load}; escalated: " + (
+            ", ".join(self.escalated) or "none"
+        )

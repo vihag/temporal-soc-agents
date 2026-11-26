@@ -20,7 +20,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client, WorkflowUpdateFailedError, WorkflowUpdateStage
+from temporalio.client import (
+    Client,
+    ScheduleActionExecutionStartWorkflow,
+    WorkflowExecutionStatus,
+    WorkflowUpdateFailedError,
+    WorkflowUpdateStage,
+)
 from temporalio.service import RPCError
 
 from soc import activities, intake, workflow
@@ -34,11 +40,12 @@ from soc.models import (
     ParkRequest,
     ReassignRequest,
 )
+from soc.report import EVERY, SCHEDULE_ID
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
-from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY, case_query, ensure_search_attributes
-from soc.worker import WorkerSupervisor
+from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY, case_query
+from soc.worker import WorkerSupervisor, bootstrap
 from soc.workflow import CaseInvestigationWorkflow
 
 E = EventType
@@ -252,6 +259,39 @@ async def intake_stats() -> dict[str, Any]:
         "queue_depth": queue["depth"],
         "queue_down": queue["down"],
     }
+
+
+@app.get("/api/report")
+async def report() -> dict[str, Any]:
+    """The shift-report Schedule: when it runs next, and what its latest run found."""
+    c = await client()
+    try:
+        info = (await c.get_schedule_handle(SCHEDULE_ID).describe()).info
+    except RPCError as err:
+        raise HTTPException(404, err.message) from err
+    latest = None
+    for done in reversed(info.recent_actions):
+        action = done.action
+        if not isinstance(action, ScheduleActionExecutionStartWorkflow):
+            continue
+        run = c.get_workflow_handle(action.workflow_id, run_id=action.first_execution_run_id)
+        if (await run.describe()).status == WorkflowExecutionStatus.COMPLETED:
+            latest = await run.result()
+            break
+    return {
+        "schedule_id": SCHEDULE_ID,
+        "every_h": EVERY.total_seconds() / 3600,
+        "runs": info.num_actions,
+        "next": [t.isoformat() for t in info.next_action_times[:1]],
+        "latest": latest,
+    }
+
+
+@app.post("/api/report")
+async def run_report() -> dict[str, str]:
+    """'Run now': trigger the Schedule once, exactly as if its time had come."""
+    await (await client()).get_schedule_handle(SCHEDULE_ID).trigger()
+    return {"message": f"triggered {SCHEDULE_ID}"}
 
 
 @app.post("/api/seed")
@@ -487,7 +527,6 @@ def serve(with_worker: bool) -> None:
         if not with_worker:
             return await server.serve()
         from soc.cli import ensure_mocks
-        from soc.intake import ensure_intake
 
         os.environ.setdefault("FIXTURE_LATENCY_S", "0.7")  # watchable demo pace
         logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # demo faults are expected
@@ -497,9 +536,7 @@ def serve(with_worker: bool) -> None:
         global _supervisor
         _supervisor = WorkerSupervisor(await client(), settings.task_queue)
         _supervisor.start()
-        if settings.search_attributes:
-            await ensure_search_attributes(await client())
-        await ensure_intake(await client(), settings.task_queue, settings.search_attributes)
+        await bootstrap(await client(), settings)
         try:
             await server.serve()
         finally:

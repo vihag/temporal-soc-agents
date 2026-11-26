@@ -71,4 +71,7 @@ steps:
   - caption: {text: "SLA breach: nobody touched the 20-second alert, so its durable timer fired and the lead was paged."}
   - wait_until: {case: "SLA", status: ESCALATED, timeout: 60}
   - assert_history: {case: "SLA", kind: timer, label: approval SLA, fired: true}
+  - caption: {text: "Schedules: a shift report runs every 8 hours on a Temporal Schedule (durable cron). 'Run now' triggers it; it counts cases straight from Visibility."}
+  - run_report: {path: by_status.SUBMITTED, at_least: 2}
+
   - caption: {text: "That's the tour. Every bar you saw came from the real Temporal event history.", pause: 3}

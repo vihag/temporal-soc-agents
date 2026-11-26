@@ -15,17 +15,19 @@ from temporalio.worker import Worker
 
 from soc import activities
 from soc.intake import IntakeWorkflow, ensure_intake
+from soc.report import ShiftReportWorkflow, ensure_schedule
 from soc.settings import Settings, connect
 from soc.visibility import ensure_search_attributes
 from soc.workflow import AskAgentWorkflow, CaseInvestigationWorkflow
 
-WORKFLOWS = [CaseInvestigationWorkflow, AskAgentWorkflow, IntakeWorkflow]
+WORKFLOWS = [CaseInvestigationWorkflow, AskAgentWorkflow, IntakeWorkflow, ShiftReportWorkflow]
 ACTIVITIES: list[Callable[..., Any]] = [
     activities.fetch_alert,
     activities.llm_create,
     activities.run_tool,
     activities.notify,
     activities.soar_submit,
+    activities.shift_report,
     activities.receive_alerts,
     activities.ack_alerts,
 ]
@@ -63,12 +65,19 @@ class WorkerSupervisor:
         return self.worker is not None
 
 
-async def run_worker() -> None:
-    settings = Settings.from_env()
-    client = await connect()
+async def bootstrap(client: Client, settings: Settings) -> None:
+    """One-time namespace setup, safe to repeat: search attributes, the intake loop, the
+    shift-report Schedule. Every step is idempotent, so any process may run it at startup."""
     if settings.search_attributes:
         await ensure_search_attributes(client)
     await ensure_intake(client, settings.task_queue, settings.search_attributes)
+    await ensure_schedule(client, settings.task_queue)
+
+
+async def run_worker() -> None:
+    settings = Settings.from_env()
+    client = await connect()
+    await bootstrap(client, settings)
     print(f"Worker polling task queue {settings.task_queue!r} (LLM: {settings.grok_client})")
     await build_worker(client, settings.task_queue).run()
 
