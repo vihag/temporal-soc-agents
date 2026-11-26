@@ -1,20 +1,30 @@
 flowchart LR
   subgraph clients [Analyst]
-    UI[Case UI]
-    CLI[CLI]
+    UI[Case console]
+    CLI[CLI / demo director]
   end
-  subgraph compose [docker compose]
-    API[analyst-api]
-    Worker[temporal-worker]
-    Temporal[Temporal dev server]
+  subgraph app [Your processes]
+    API[analyst-api + /codec]
+    Worker["SocWorker: soc-case queue (Workflows, fast Activities) + soc-case-llm queue (model calls, rate limited)"]
+  end
+  subgraph temporal [Temporal server or Cloud]
+    Hist[(Event histories)]
+    Vis[(Visibility: CaseStatus / Assignee / Severity)]
+    Sched[Schedule: shift report every 8h]
+  end
+  subgraph mocks [Local mocks]
+    Queue[mock-queue SQS-like]
     Splunk[mock-splunk]
-    Soar[mock-soar]
+    Soar[mock-soar unique case_id]
+    MGrok[mock-grok]
   end
   Grok[xAI Grok when a key is set]
   UI --> API
   CLI --> API
-  API --> Temporal
-  Worker --> Temporal
+  API -->|Updates, Queries, list queries| temporal
+  Worker -->|"poll task queues; payloads encrypted when SOC_CODEC_KEY is set"| temporal
+  Worker --> Queue
   Worker --> Splunk
   Worker --> Soar
+  Worker --> MGrok
   Worker -.-> Grok

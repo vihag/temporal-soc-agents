@@ -1,93 +1,183 @@
-# Code tour
+# Learn Temporal through one SOC case
 
-A 15-minute walk through the repo, for a Temporal reviewer reading offline and for Vihag screen-sharing on the call. Read **these seven stops, in this order**. Links go to exact lines on `main`.
+A beginner's path through this repo: ten short lessons, about 5 minutes each. Each lesson explains one idea in plain words, links the exact lines that do it, gives you something to try, and names the test that proves it. You need Python. You do not need to know Temporal.
 
-Alerts arrive on a queue. One intake Workflow turns each into one case Workflow. Agent classes do the investigation. Analysts act through validated Updates. Every model call, tool call, queue poll and side effect is an Activity. Splunk, SOAR, Grok and the queue are small local mocks; Grok is real only when `GROK_CLIENT=http` and a key are set.
+> Edit `docs/CODE_TOUR.tpl.md`, not this file, then run `uv run python scripts/build_tour.py` to refresh the line links. CI fails if they drift.
 
----
+**Setup for the "Try it" steps** (fixture mode: no API key, $0):
 
-## 1. `src/soc/models.py`: the vocabulary (about 2 minutes)
-
-- [`ROSTER`](src/soc/models.py#L15) and [`Status`](src/soc/models.py#L18): the analysts on shift and the case states (incl. `ASSIGNED`, `PARKED`). The Workflow's `_enter()` is the only writer of status.
-- [`CaseInput`](src/soc/models.py#L36): the Workflow input (scenario, assignee, alert id, SLA). Runtime knobs ride here because Workflow code must not read env vars.
-- The analyst Update payloads: [`DecisionRequest`](src/soc/models.py#L94), [`ReassignRequest`](src/soc/models.py#L104), [`ParkRequest`](src/soc/models.py#L111), [`AskRequest`](src/soc/models.py#L118). Then [`IntakeState`](src/soc/models.py#L160) (what intake carries across continue-as-new) and [`Case`](src/soc/models.py#L201) (what the `get_case` Query returns).
-
-Plain dataclasses, no I/O.
+```bash
+temporal server start-dev                  # terminal 1. Temporal UI on http://localhost:8233
+uv run python -m soc api --with-worker     # terminal 2. Console on http://localhost:8080
+```
 
 ---
 
-## 2. `src/soc/intake.py`: the queue becomes cases (about 2 minutes)
+## Lesson 1: The big idea
 
-- [`IntakeWorkflow.run`](src/soc/intake.py#L32): poll (`receive_alerts`), open a case per message, ack, sleep, and every N polls [`continue_as_new`](src/soc/intake.py#L41) with the same counters.
-- [`_open_case`](src/soc/intake.py#L43): `start_child_workflow(..., id=f"case-{alert_id}", ABANDON, REJECT_DUPLICATE)`. A duplicate alert raises `WorkflowAlreadyStartedError` and is counted, not re-opened. Round robin assigns the analyst.
-- [`ensure_intake`](src/soc/intake.py#L79): every worker can call it; `USE_EXISTING` makes it idempotent.
+A SOC case takes minutes to days. Along the way it calls flaky things (Splunk, a model, SOAR), waits for a human, and must survive restarts. Usually you would build a state table, a job queue, retry loops, cron jobs and idempotency keys.
 
-A queue outage is just `receive_alerts` retrying forever (stop 5). Alerts stay in the queue.
+With Temporal you write the case as **one ordinary async function**, the **Workflow**. Temporal records every step in an **event history** on the server. If the worker process dies, a new worker re-runs the function from the top. Steps that already finished are not executed again: their results are read back from the history. This is **replay**, and it is why the function can "sleep for two days" or "wait for an analyst" safely.
 
----
+Two kinds of code follow from that:
 
-## 3. `src/soc/workflow.py`: the case lifecycle *is* the state machine (about 4 minutes)
+- **Workflow code** (`workflow.py`, `intake.py`, `report.py`): decisions only. It must be *deterministic*: same history in, same decisions out. No network, no clock, no randomness.
+- **Activity code** (`activities.py`): anything that touches the outside world. Temporal retries Activities and records their results.
 
-Linger here.
+A **worker** (src/soc/worker.py#L35) is your process: it polls a **task queue** and runs both kinds of code. The Temporal server stores state and hands out tasks. It never runs your code.
 
-- [`run()`](src/soc/workflow.py#L60) → [`_lifecycle()`](src/soc/workflow.py#L67): read it top to bottom. `fetch_alert` → assigned → `TriageAgent` → routing → auto-resolve / review / investigate → propose → wait for the analyst (rework loop) → `soar_submit`. `run()` ends with `wait_condition(all_handlers_finished)` so no Update result is lost.
-- [`_investigate()`](src/soc/workflow.py#L106): Evidence and Threat agents in parallel with `asyncio.gather`.
-- [`_wait_for_analyst()`](src/soc/workflow.py#L116): the approval SLA is a durable timer ([`timeout_summary="approval SLA"`](src/soc/workflow.py#L137)). On timeout: `ESCALATED`, page the lead, keep waiting. A parked case waits in [`_stay_parked()`](src/soc/workflow.py#L149) on its own `park timer` instead, so the SLA is paused.
-- Updates, each with a validator that refuses bad requests *before* they reach history: [`decide`](src/soc/workflow.py#L190) (assignee only), [`reassign`](src/soc/workflow.py#L208), [`park`](src/soc/workflow.py#L225) / [`unpark`](src/soc/workflow.py#L242), and [`ask`](src/soc/workflow.py#L255), which runs a child [`AskAgentWorkflow`](src/soc/workflow.py#L293) and attaches its answer, evidence and findings to the case.
+*Try it*: press **Seed 8 alerts**, open a case, and look at the right-hand timeline. Every bar is a real history event.
 
 ---
 
-## 4. `src/soc/agents.py`: agents, one loop (about 2 minutes)
+## Lesson 2: The Workflow is the state machine
 
-- [`Agent._converse()`](src/soc/agents.py#L43): the Temporal AI-cookbook loop, in one place. Call the `llm_create` Activity; if the model asks for a tool, run the `run_tool` Activity; repeat until it answers.
-- [`TriageAgent`](src/soc/agents.py#L76), [`EvidenceAgent`](src/soc/agents.py#L89), [`ThreatAgent`](src/soc/agents.py#L100), [`DispositionAgent`](src/soc/agents.py#L111) and the analyst-facing [`InvestigatorAgent`](src/soc/agents.py#L122) only declare instructions, tools and answer keys.
+There is no status table. The case's status is just a field the Workflow sets as it moves through its code.
 
----
+- [`Status`](src/soc/models.py#L23) lists the states. [`_enter()`](src/soc/workflow.py#L178) is the only place that changes it.
+- Read [`_lifecycle()`](src/soc/workflow.py#L70) top to bottom: fetch the alert → triage → route (auto-resolve / review / investigate) → propose a disposition → wait for the analyst → submit to SOAR. That is the whole state machine, as code.
+- [`run()`](src/soc/workflow.py#L63) ends with [`wait_condition(all_handlers_finished)`](src/soc/workflow.py#L67), so an analyst's in-flight request is never cut off.
+- Inputs arrive as [`CaseInput`](src/soc/models.py#L41). Settings travel in the input because Workflow code may not read environment variables (they could differ on replay).
 
-## 5. `src/soc/activities.py` + `src/soc/llm.py`: the I/O boundary (about 3 minutes)
+The diagram: [`diagrams/case-states.png`](diagrams/case-states.png).
 
-- Activities: [`fetch_alert`](src/soc/activities.py#L52), [`llm_create`](src/soc/activities.py#L62), [`run_tool`](src/soc/activities.py#L88), [`notify`](src/soc/activities.py#L97), [`soar_submit`](src/soc/activities.py#L103), [`receive_alerts`](src/soc/activities.py#L116), [`ack_alerts`](src/soc/activities.py#L126).
-- [`OPTIONS`](src/soc/activities.py#L146): every timeout and retry policy in one table (queue Activities retry forever). [`call()`](src/soc/activities.py#L157) applies it.
-- `llm_create` validates each reply; a bad sample raises, so Temporal retries it (self-healing).
-- [`GrokClient`](src/soc/llm.py#L22): one OpenAI-compatible client. It talks to xAI when live, otherwise to Mock Grok, so fixture mode goes through the same HTTP path and the chaos panel can break it. `max_retries=0`, so Temporal owns retries; 429 → `next_retry_delay=Retry-After`.
-
----
-
-## 6. `services/` + `src/soc/chaos.py`: the outside world, and breaking it (about 1 minute)
-
-- [`JsonHandler`](services/common.py#L30): every mock has `POST /admin/outage {"seconds", "code"}`. [`AlertQueue`](services/mock_queue.py#L21) is SQS-like (receive, visibility timeout, delete); during an outage, sends still work, so alerts buffer.
-- [`mock_grok.reply`](services/mock_grok.py#L20) replays recorded turns per scenario/agent/step. The ask agent picks a script by keyword.
-- [`Chaos`](src/soc/chaos.py#L26): outage switches, [`SEED`](src/soc/chaos.py#L14) (8 alerts, one duplicate), and the SLA-breach alert. [`WorkerSupervisor`](src/soc/worker.py#L37) stops and restarts the in-process worker.
-- [`SoarStore`](services/mock_soar.py#L16) is unique on `case_id`: the other half of exactly-once.
+*Proved by*: `tests/test_simulations.py` (five scenarios end to end).
 
 ---
 
-## 7. `src/soc/api.py` + `src/soc/ui/index.html`: the console (about 2 minutes)
+## Lesson 3: Activities and retries
 
-- `api.py` is a stateless Temporal client. [`act`](src/soc/api.py#L159) maps decide / reassign / park / unpark / ask to Updates (validator refusal → HTTP 409; `ask` returns once *accepted*). [`HistoryBars`](src/soc/api.py#L260) turns the **real** event history into Gantt bars: Activities with failed attempts, timers labelled by their summary, Updates by name, child Workflows, duplicate rejects. Plus [`/api/intake`](src/soc/api.py#L194), [`/api/chaos`](src/soc/api.py#L220) and [`/api/seed`](src/soc/api.py#L215).
-- `ui/index.html`, one file and plain JS: **Cases** (an analyst switcher, my/all, filters, actions, the live timeline on the right), **Alert intake**, **Self demo**, and the **⚡ Chaos** bar. Every bar opens a *What Temporal did here* drawer.
+An Activity is a normal async function marked `@activity.defn`. The Workflow calls it, and Temporal handles timeouts and retries.
 
-Supporting files: [`simulate.py`](src/soc/simulate.py#L39) (five narrated scenarios, also used by pytest), [`settings.connect`](src/soc/settings.py#L56) (local or Cloud is configuration only) and [`cli.py`](src/soc/cli.py#L141).
+- The Activities: [`fetch_alert`](src/soc/activities.py#L54), [`llm_create`](src/soc/activities.py#L64), [`run_tool`](src/soc/activities.py#L90), [`notify`](src/soc/activities.py#L99), [`soar_submit`](src/soc/activities.py#L105).
+- [`OPTIONS`](src/soc/activities.py#L167): every timeout and retry policy in one table. [`call()`](src/soc/activities.py#L188) applies the right row. `0` attempts means "retry until it works" (used for the queue).
+- The model client is built with [`max_retries=0`](src/soc/llm.py#L37), so only Temporal retries. A 429 becomes [`next_retry_delay`](src/soc/llm.py#L61) = Retry-After.
+- **Self-healing**: `llm_create` validates the model's answer and raises if it is malformed. Temporal retries it, and the next sample is usually fine.
+
+*Try it*: **⚡ Chaos → Grok 503**, then seed again. The triage bar turns striped: attempt 2, 3, 4… Click it to see the error and the backoff. The Workflow code never noticed.
+
+*Proved by*: `test_agents.py::test_llm_self_heal`, `test_v2.py::test_model_outage_heals`, `test_agents.py::test_grok_rate_limit_uses_retry_after`.
 
 ---
 
-## Tests (26, time-skipping, no live Grok)
+## Lesson 4: Agents, in parallel, rate limited
 
-| Test | Proves |
+An "agent" here is a small class, not a service. [`Agent._converse()`](src/soc/agents.py#L43) is the loop from Temporal's AI cookbook: ask the model (an Activity); if it asks for a tool, run the tool (an Activity); repeat until it answers. Each call is durable, so a crash mid-loop loses nothing.
+
+- [`TriageAgent`](src/soc/agents.py#L76), [`EvidenceAgent`](src/soc/agents.py#L89), [`ThreatAgent`](src/soc/agents.py#L100), [`DispositionAgent`](src/soc/agents.py#L111) only declare their instructions and tools.
+- Parallelism is plain [`asyncio.gather`](src/soc/workflow.py#L112) in the Workflow: Evidence and Threat run side by side, and their bars overlap on the timeline.
+- **Rate limiting**: every model call goes to its own task queue, [`<queue>-llm`](src/soc/activities.py#L184). The `-llm` worker sets `max_task_queue_activities_per_second` (`LLM_RATE_PER_S`, default 5). The server enforces it across all workers, so a burst of cases queues up instead of hammering the model.
+
+*Proved by*: `test_agents.py::test_parallel_agents`, `test_agents.py::test_evidence_loop_uses_tools`, `test_versioning.py::test_new_escalations_take_the_patched_branch` (checks the `-llm` queue).
+
+---
+
+## Lesson 5: The human gate: Update, timer, Query
+
+The Workflow proposes a disposition and waits for an analyst.
+
+- **Query** = read the Workflow's state without changing it: [`get_case`](src/soc/workflow.py#L201). The console polls it.
+- **Update** = a request that changes the Workflow and returns an answer: [`decide`](src/soc/workflow.py#L211). Its [validator](src/soc/workflow.py#L218) runs first and can refuse ("only the assignee may decide"). A refused request never enters the history.
+- **Durable timer**: [`wait_condition(..., timeout=sla)`](src/soc/workflow.py#L142) waits for a decision *or* the approval SLA. The timer lives on the server, so it still fires if every worker is down. On timeout the case becomes `ESCALATED`, the lead is paged, and the case keeps waiting.
+
+*Try it*: approve a case as the wrong analyst (switcher, top right): refused. Then approve as the assignee.
+
+*Proved by*: `test_workflow.py::test_duplicate_case_id_and_decide_validation`, `test_simulations.py` (`approval_timeout_escalated` skips a 2-minute timer in milliseconds).
+
+---
+
+## Lesson 6: Intake: child Workflows and idempotency
+
+Alerts arrive on an SQS-like queue. [`IntakeWorkflow`](src/soc/intake.py#L27) is a Workflow that never ends: poll, open cases, ack, sleep, repeat.
+
+- [`_open_case`](src/soc/intake.py#L43) starts one **child Workflow** per alert, with id `case-{alert_id}`. [`ABANDON`](src/soc/intake.py#L58) lets cases outlive the intake loop.
+- **Idempotency for free**: Temporal allows only one Workflow per id. A duplicate alert hits [`REJECT_DUPLICATE`](src/soc/intake.py#L59) and raises [`WorkflowAlreadyStartedError`](src/soc/intake.py#L61), which is counted and ignored.
+- **Ack after start**: the message is deleted only after its case exists. A crash in between means redelivery, and redelivery is a harmless duplicate.
+- **Continue-as-new**: an endless loop would grow an endless history, so every N polls it [restarts itself](src/soc/intake.py#L41) with fresh history and the same counters.
+- [`ensure_intake`](src/soc/intake.py#L80) is safe to call from every process (`USE_EXISTING`).
+
+*Try it*: Seed, then open **Alert intake**: *Duplicates ignored = 1*.
+
+*Proved by*: `test_v2.py::test_intake_round_robin_duplicate_and_queue_outage`, `::test_intake_continues_as_new_and_keeps_counters`.
+
+---
+
+## Lesson 7: Park and reassign: more Updates and timers
+
+- [`reassign`](src/soc/workflow.py#L229): an Update that moves the case to another analyst. The new owner continues at exactly the same step, because the step is the Workflow's position in its code.
+- [`park`](src/soc/workflow.py#L247) → [`_stay_parked()`](src/soc/workflow.py#L160): a second durable timer (`park timer`). The approval SLA does not run while parked. The case resumes when the timer fires, on [`unpark`](src/soc/workflow.py#L264), or on a decision.
+- [`ask`](src/soc/workflow.py#L277): an Update that runs a child [`AskAgentWorkflow`](src/soc/workflow.py#L315). That child is an agent loop with tools, such as exemption tickets, and its answer is attached to the case.
+
+*Try it*: park a case for 1 minute and watch the `park timer` bar. Ask "Any exemption tickets for this user this week?".
+
+*Proved by*: `test_v2.py::test_reassign_moves_the_case_to_the_new_analyst`, `::test_park_timer_resumes_and_sla_does_not_run_while_parked`, `::test_ask_agent_runs_as_child_and_attaches_findings`.
+
+---
+
+## Lesson 8: Chaos, durability, replay, determinism
+
+- [`Chaos`](src/soc/chaos.py#L27) flips outage switches on the mocks. [`WorkerSupervisor`](src/soc/worker.py#L75) stops the worker entirely and starts a fresh one.
+- **Durability**: with no worker, nothing is lost. Timers keep ticking on the server, and the case simply pauses. The new worker replays the history and carries on. No Activity runs twice.
+- **Determinism**: replay only works if the Workflow makes the same decisions again. So Workflow code uses `workflow.now()` instead of the clock, and keeps all I/O in Activities. The SDK's sandbox catches many mistakes.
+- **Exactly-once effects**: Temporal runs an Activity *at least* once (a lost response means a retry). SOAR is [unique on `case_id`](services/mock_soar.py#L16), so the retry gets the same ticket back. Retries plus an idempotent receiver give exactly-once effects.
+
+*Try it*: **⚡ Chaos → Kill worker** while a case is investigating.
+
+*Proved by*: `test_workflow.py::test_replay_is_deterministic`, `::test_worker_restart_resumes_without_rerunning_activities`, `test_simulations.py` (`activity_failure_retry`: one SOAR ticket).
+
+---
+
+## Lesson 9: Production features: search attributes, Schedules, versioning, codec
+
+- **Search attributes** ([`visibility.py`](src/soc/visibility.py#L19)): each case [upserts](src/soc/workflow.py#L184) `CaseStatus`, `Assignee`, `Severity`. The case queue is then **one Visibility query** ([`case_query`](src/soc/visibility.py#L38), run by [`list_cases`](src/soc/api.py#L140)) instead of one Query per case. The console shows the query under the filters. The same query works in the Temporal UI.
+- **Schedules** ([`report.py`](src/soc/report.py#L35)): a shift report every 8 hours. A Schedule is durable cron owned by the server, with [overlap = SKIP](src/soc/report.py#L53). *Run now* on the Alert intake tab triggers it.
+- **Versioning**: escalation now also pages a backup analyst. Cases already running recorded their history without that step, so the new step sits behind [`workflow.patched`](src/soc/workflow.py#L153). New runs record a marker and page. Old histories replay without it. `tests/histories/` holds histories from the previous release, and CI replays them.
+- **Payload codec** ([`EncryptionCodec`](src/soc/codec.py#L28)): with `SOC_CODEC_KEY` set, alerts, prompts and answers are AES-GCM encrypted before they leave the process. The server stores only ciphertext. The console decrypts, and [`/codec`](src/soc/api.py#L276) lets the Temporal UI decrypt too.
+- **Metrics**: `METRICS_BIND=0.0.0.0:9464` serves SDK metrics for Prometheus ([`_runtime`](src/soc/settings.py#L77)).
+- **Cloud**: [`connect()`](src/soc/settings.py#L63) reads Temporal's standard env config, so Cloud is configuration only. See [`docs/CLOUD.md`](docs/CLOUD.md) and `make cloud`.
+- [`bootstrap()`](src/soc/worker.py#L103) runs the one-time setup (search attributes, intake, schedule). It is idempotent, so any process may run it.
+
+*Proved by*: `test_versioning.py` (both tests), `test_codec.py`, and the e2e runbook (`wait_list` on the PARKED filter, `run_report`).
+
+---
+
+## Lesson 10: The demo, as code
+
+[`Director`](src/soc/director.py#L54) plays [`demo/runbook.yaml`](demo/runbook.yaml), a list of steps (`seed`, `chaos`, `act`, `wait_until`, `assert_history`, `run_report`, `caption`…) that call the console's HTTP API, the same one the UI uses. Normal speed shows captions in the console. `--fast` is the end-to-end test in CI (`tests/test_e2e.py`, a real dev server).
+
+```bash
+uv run python -m soc demo run          # or: make demo
+uv run python -m soc demo run --fast   # or: make demo-fast
+```
+
+---
+
+## Where each guarantee lives
+
+| Guarantee | What could go wrong | Where it lives here | What Temporal does for you |
+| --- | --- | --- | --- |
+| **Durability** | A worker crashes mid-investigation; a 2-day park outlives every deploy | Event history on the server; [`WorkerSupervisor`](src/soc/worker.py#L75) drill | Persists every step and timer. A new worker replays and resumes. No checkpoint code |
+| **Consistency** | Two analysts act at once; someone approves a closed case | Update [validators](src/soc/workflow.py#L218); a single writer of status ([`_enter`](src/soc/workflow.py#L178)) | One Workflow processes its events one at a time, so there are no races on case state. Validators reject requests before they reach history |
+| **Idempotency** | The same alert arrives twice; a queue message is redelivered | Workflow id `case-{alert_id}` + [`REJECT_DUPLICATE`](src/soc/intake.py#L59) | Workflow-id uniqueness makes "start" idempotent; no dedupe table |
+| **Exactly-once effects** | SOAR's response is lost and the ticket is filed twice | [`soar_submit`](src/soc/activities.py#L105) retries + SOAR unique on `case_id` | At-least-once Activities with durable retries. Pair them with an idempotent receiver |
+| **Retries / backpressure** | Grok rate-limits; Splunk times out; the queue is down | [`OPTIONS`](src/soc/activities.py#L167), the `-llm` queue rate limit | Server-side retries with backoff (and Retry-After); task-queue rate limits shared across all workers |
+| **Timeouts / SLAs** | Nobody approves; a park must end on time | [`wait_condition` + timer](src/soc/workflow.py#L142), park timer | Durable timers that fire even with no worker running |
+| **Visibility** | "Show me ben's parked cases" across thousands | [Search attributes](src/soc/visibility.py#L38) + memo | Indexed Visibility store; list queries in one call, also in the Temporal UI |
+| **Evolvability** | A deploy changes the Workflow while cases are in flight | [`workflow.patched`](src/soc/workflow.py#L153) + replay tests | Patch markers in history; the `Replayer` catches nondeterminism in CI |
+| **Confidentiality** | Alert contents and prompts sit in a hosted service | [`EncryptionCodec`](src/soc/codec.py#L28) | The codec hook encrypts every payload client-side; the server and Cloud see ciphertext |
+
+What Temporal does **not** do for you: make your side effects idempotent (that is SOAR's `case_id`), or keep Workflow code deterministic (that is your discipline, checked by replay tests).
+
+## The tests (33, no live Grok)
+
+| Test file | What it proves |
 | --- | --- |
-| `tests/test_v2.py` | Intake: child per alert, round robin, duplicate no-op, a queue outage retried and drained; continue-as-new keeps counters; reassign; the park timer pauses the SLA and auto-resumes, plus unpark; ask runs a child Workflow and attaches the exemption finding; a model outage heals by retry |
-| `tests/test_simulations.py` | All five demo scenarios end to end: the SLA timer, escalation, reject → re-investigate, retries, one SOAR ticket |
-| `tests/test_workflow.py` | Review routing, a fatal model error → `NEEDS_REVIEW`, duplicate case ID, Update validator, deterministic **replay**, **worker restart** mid-case |
-| `tests/test_agents.py` | LLM self-heal, tool calls over HTTP, parallel agents, Grok 429/4xx/tool-call mapping (faked HTTP) |
-| `tests/test_soar.py`, `tests/test_api.py` | SOAR uniqueness; history → Gantt bars; every analyst action through the API and its validator |
-
-## If they ask "where is X?"
-
-| Question | Go to |
-| --- | --- |
-| Where does status change? | [`_enter()`](src/soc/workflow.py#L167) |
-| Where are retries configured? | [`OPTIONS`](src/soc/activities.py#L146) |
-| How are duplicates prevented? | [`_open_case`](src/soc/intake.py#L43): Workflow id `case-{alert_id}` |
-| Where are child Workflows? | Intake → case (ABANDON) and case → `AskAgentWorkflow` |
-| How do I start it? | `README.md` |
-| How do we demo it? | `DEMO.md` |
+| `test_simulations.py` | All five scenarios: SLA timer, escalation, reject → re-investigate, retries, one SOAR ticket |
+| `test_workflow.py` | Routing, fatal model error → review, duplicate id, validator, replay, worker restart |
+| `test_agents.py` | Self-heal, tools over HTTP, parallel agents, 429 / 4xx / tool-call mapping |
+| `test_v2.py` | Intake (round robin, duplicate, queue outage, continue-as-new), reassign, park, ask, model outage |
+| `test_versioning.py` | Previous-release histories replay; new runs take the patched branch; model calls use the `-llm` queue |
+| `test_codec.py` | History holds ciphertext; the console decrypts; codec endpoint round trip |
+| `test_api.py`, `test_soar.py` | History → timeline bars; actions through validators; SOAR uniqueness |
+| `test_e2e.py` | The whole presenter runbook on a real dev server: search attributes, Schedule, chaos |
+| `test_docs.py` | This tour's line links are current |

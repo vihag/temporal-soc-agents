@@ -34,10 +34,10 @@ Evidence paths are the intended layout (repo name: `temporal-soc-agents`). They 
 | C4 | Signals, Queries, Updates for HITL | Query `get_case`. Update `decide` (analyst + phase). `wait_condition` blocks without a worker thread | Approve/reject in the UI; show the Update in Temporal UI | `src/soc/workflow.py` | must |
 | C5 | Timers and escalation | Durable 2-minute demo timer. On timeout: notify, mark `ESCALATED`, keep waiting | Time-skipping test; optional live 2-minute wait | `tests/test_simulations.py::test_simulation[approval_timeout_escalated]` | must |
 | C6 | Parallelism (no child Workflows) | `asyncio.gather(EvidenceAgent().run(), ThreatAgent().run())` inside the parent. Same history, easier to read. Threat can be disabled to save tokens | In the Temporal UI, show overlapping Evidence and Threat Activities | `src/soc/workflow.py`, `src/soc/agents.py` | should |
-| C7 | Versioning and determinism | No I/O or wall clock in Workflow or Agent.run. `workflow.patched` only if the happy path later changes | Point at `workflow.py` / `agents.py` and explain why the LLM is an Activity | those two files | should |
+| C7 | Versioning and determinism | No I/O or wall clock in Workflow code. The escalation's backup page ships behind `workflow.patched`; saved histories from the previous release replay in CI | Point at the patch in `_wait_for_analyst`, then `tests/histories/` | `src/soc/workflow.py`, `tests/test_versioning.py` (see T3) | should |
 | C8 | Visibility in the Temporal UI, and in our UI drawers | Every LLM and tool call is an Activity. The case UI stays clean; a "What Temporal did here" drawer shows history, retries, prompt/response, and a link to the Temporal UI | Open the drawer on the triage step, then jump to Cloud UI | UI drawer; namespace `quickstart-vihaggupta.om7xm` | must |
 | C9 | Testing with time-skipping | `WorkflowEnvironment.start_time_skipping()` for the approval SLA | `pytest -k approval_timeout` | that test | must |
-| C10 | Workers and task queues | One queue, `soc-case`, one worker service. A later `soc-llm` split is a talking point only | Show the single worker container | `src/soc/worker.py`, `compose.yml` | should |
+| C10 | Workers and task queues | `soc-case` for Workflows and fast Activities; `soc-case-llm` for model calls, rate limited by the server (`LLM_RATE_PER_S`). One `SocWorker` runs both | Temporal UI → task queues | `src/soc/worker.py`, `src/soc/activities.py` (see T4) | should |
 | C11 | Cloud vs local | `ClientConfig`: local compose / `localhost:7233`, or `TEMPORAL_PROFILE=cloud-setup` | Same app, only the profile changes | `README.md` | must |
 | **D. Temporal AI pillars** | | | | | |
 | D1 | Workflows-as-code across models, tools, systems | One Workflow orchestrates Grok, Splunk tools, notify, and SOAR | Trace `run()` from `fetch_alert` to `soar_submit` | `src/soc/workflow.py` | must |
@@ -81,3 +81,17 @@ Cite them in contracts, PR descriptions, and `DEMO.md`. If a feature has no must
 | V10 | Worker crash and replay | `worker.WorkerSupervisor.down_for` | `test_workflow.py` restart test | Chaos *Kill worker* |
 | V11 | `wait_condition(all_handlers_finished)` before completing (no lost Update results) | `CaseInvestigationWorkflow.run` | ask test (approve while the child runs) | — |
 | V12 | Chaos panel (UI + CLI) via the mocks' `/admin/outage` switch | `src/soc/chaos.py`, `services/common.py`, `api.chaos` | `test_model_outage_heals` (`fail_next`) | Chaos bar |
+
+## v3: Temporal-complete
+
+| ID | Primitive | Where in code | Test | Demo moment |
+| --- | --- | --- | --- | --- |
+| T1 | Custom search attributes (`CaseStatus`, `Assignee`, `Severity`) + memo; the case queue is a Visibility list query | `src/soc/visibility.py`, `workflow._index`, `api.list_cases` | e2e runbook `wait_list` (PARKED filter) | The query under the Cases filters |
+| T2 | Schedule (every 8h, overlap SKIP) starting `ShiftReportWorkflow`; trigger = *Run now* | `src/soc/report.py`, `activities.shift_report`, `api.report` | e2e runbook `run_report` | Alert intake → *Shift report* |
+| T3 | Versioning: `workflow.patched("page-backup-on-escalation")`; replay of previous-release histories | `workflow._wait_for_analyst`, `tests/histories/` | `test_versioning.py` (both) | SLA case: third `notify` bar |
+| T4 | Separate task queue for model calls with `max_task_queue_activities_per_second` | `activities.call`, `worker.SocWorker` | `test_versioning.py::test_new_escalations_take_the_patched_branch` (queue name) | Temporal UI task queues |
+| T5 | Payload codec (AES-GCM) + codec endpoint for the Temporal UI | `src/soc/codec.py`, `api.codec_endpoint`, `settings.connect` | `test_codec.py` | `SOC_CODEC_KEY=… make api` |
+| T6 | SDK metrics (Prometheus) | `settings._runtime` | manual (`curl :9464/metrics`) | — |
+| T7 | Cloud readiness: env config, `make cloud`, SA registration, codec on Cloud | `Makefile`, `docs/CLOUD.md` | `make cloud` without vars exits 2 | — |
+| T8 | Idempotent namespace bootstrap (search attributes, intake, schedule) | `worker.bootstrap` | e2e | — |
+| — | Not built, documented: continue-as-new for cases, Nexus, multi-region | `docs/CLOUD.md` § How it would extend | — | Q&A |
