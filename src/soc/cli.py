@@ -74,7 +74,11 @@ async def start(scenario: str) -> None:
     settings = Settings.from_env()
     alert_id = Scenario.load(scenario, settings.fixtures_dir).alert["alert_id"]
     inp = CaseInput(
-        scenario, settings.enable_threat, settings.approval_timeout_s, settings.max_agent_steps
+        scenario,
+        settings.enable_threat,
+        settings.approval_timeout_s,
+        settings.max_agent_steps,
+        indexed=settings.search_attributes,
     )
     client = await connect()
     handle = await client.start_workflow(

@@ -14,9 +14,8 @@ from temporalio.testing import WorkflowEnvironment
 
 from soc import api
 from soc.director import Director
-from soc.intake import ensure_intake
 from soc.settings import Settings
-from soc.worker import WorkerSupervisor
+from soc.worker import WorkerSupervisor, bootstrap
 
 ROOT = Path(__file__).parents[1]
 LOCAL_CLI = Path.home() / ".temporalio/bin/temporal"  # reuse it if installed; CI downloads
@@ -34,7 +33,7 @@ async def test_presenter_runbook_end_to_end(settings):
         task_queue = Settings.from_env().task_queue
         api._client, api._supervisor = env.client, WorkerSupervisor(env.client, task_queue)
         api._supervisor.start()
-        await ensure_intake(env.client, task_queue)
+        await bootstrap(env.client, Settings.from_env())  # search attributes on by default
         port = _free_port()
         server = uvicorn.Server(uvicorn.Config(api.app, port=port, log_level="warning"))
         serving = asyncio.create_task(server.serve())

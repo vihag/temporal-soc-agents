@@ -118,6 +118,17 @@ class Director:
             await asyncio.sleep(0.5)
         raise RunbookFailed(f"step {n}: {cid} never reached {want or a}")
 
+    async def wait_list(self, a: dict[str, Any], n: int, total: int) -> None:
+        """The case shows up in the queue filtered by status/assignee (a Visibility query)."""
+        cid = self.case_id(a["case"])
+        params: dict[str, str] = {k: str(a[k]) for k in ("status", "assignee") if k in a}
+        for _ in range(int(a.get("timeout", 30) * 2)):
+            listing = (await self.http.get("/api/cases", params=params)).json()
+            if any(row["id"] == cid for row in listing["rows"]):
+                return
+            await asyncio.sleep(0.5)
+        raise RunbookFailed(f"step {n}: {cid} not in the queue for {params}")
+
     async def act(self, a: dict[str, Any], n: int, total: int) -> None:
         cid = self.case_id(a["case"])
         case = (await self.http.get(f"/api/cases/{cid}")).json()
@@ -157,6 +168,20 @@ class Director:
             and bar.get("attempt", 1) >= a.get("min_attempt", 1)
             and bar.get("fired", False) >= a.get("fired", False)
         )
+
+    async def run_report(self, a: dict[str, Any], n: int, total: int) -> None:
+        """Trigger the shift-report Schedule now, wait for that run, check what it counted."""
+        before = ((await self.http.get("/api/report")).json()["latest"] or {}).get("at")
+        (await self.http.post("/api/report")).raise_for_status()
+        for _ in range(int(a.get("timeout", 30) * 2)):
+            latest = (await self.http.get("/api/report")).json()["latest"]
+            if latest and latest["at"] != before:
+                if not holds(dig(latest, a["path"]), a):
+                    raise RunbookFailed(f"step {n}: report {a['path']} = {dig(latest, a['path'])}")
+                self.say(f"  report: {latest['by_status']}")
+                return
+            await asyncio.sleep(0.5)
+        raise RunbookFailed(f"step {n}: the triggered shift report never finished")
 
     async def assert_intake(self, a: dict[str, Any], n: int, total: int) -> None:
         intake = (await self.http.get("/api/intake")).json()

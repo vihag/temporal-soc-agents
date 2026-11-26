@@ -42,9 +42,12 @@ with workflow.unsafe.imports_passed_through():
         SoarSubmit,
         Status,
         TimelineEntry,
+        next_analyst,
     )
+    from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY
 
 MAX_REWORK = 2  # an analyst may reject (and send back for re-investigation) at most twice
+PAGE_BACKUP = "page-backup-on-escalation"  # patch id (see the versioning lesson)
 CLOSED = (Status.SUBMITTED, Status.AUTO_RESOLVED, Status.NEEDS_REVIEW)
 
 
@@ -68,6 +71,8 @@ class CaseInvestigationWorkflow:
         case = self.case
         case.case_id = workflow.info().workflow_id
         case.alert = await call(fetch_alert, inp)
+        if inp.indexed:  # display fields for the Visibility list (no Query needed)
+            workflow.upsert_memo({"title": case.alert.title, "host": case.alert.host})
         self._enter(Status.NEW, f"Alert {case.alert.alert_id}: {case.alert.title}")
         case.assignee = inp.assignee
         self._enter(Status.ASSIGNED, f"Assigned to {inp.assignee}")
@@ -142,6 +147,12 @@ class CaseInvestigationWorkflow:
                     Status.ESCALATED, f"No decision in {inp.approval_timeout_s}s; paged lead"
                 )
                 await call(notify, f"ESCALATION {self.case.case_id}: approval overdue")
+                # v3 adds a second page. Cases already past this point in their history must
+                # replay without it, so the new command sits behind a patch marker: new runs
+                # record the marker and page, old histories (no marker) skip it on replay.
+                if workflow.patched(PAGE_BACKUP):
+                    backup = next_analyst(self.case.assignee)
+                    await call(notify, f"ESCALATION {self.case.case_id}: {backup}, please cover")
         self.awaiting_decision = False
         self.case.decisions.append(self.decision)
         return self.decision
@@ -167,7 +178,17 @@ class CaseInvestigationWorkflow:
     def _enter(self, status: Status, note: str) -> Case:
         """The one place status changes. Also appends the timeline the UI and CLI show."""
         self.case.status = status
+        self._index()
         return self._note(note)
+
+    def _index(self) -> None:
+        """Keep the search attributes the case queue filters on in step with the case."""
+        if not self.inp.indexed:
+            return
+        updates = [CASE_STATUS.value_set(self.case.status), ASSIGNEE.value_set(self.case.assignee)]
+        if self.case.alert:
+            updates.append(SEVERITY.value_set(self.case.alert.severity))
+        workflow.upsert_search_attributes(updates)
 
     def _note(self, note: str) -> Case:
         """A timeline entry without a status change (reassign, questions)."""
@@ -208,6 +229,7 @@ class CaseInvestigationWorkflow:
     def reassign(self, request: ReassignRequest) -> Case:
         """Hand the case to another analyst. Nothing restarts: same step, same timeline."""
         previous, self.case.assignee = self.case.assignee, request.to_analyst
+        self._index()
         return self._note(
             f"Reassigned {previous} -> {request.to_analyst} by {request.by}: {request.reason}"
         )

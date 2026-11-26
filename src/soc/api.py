@@ -16,15 +16,25 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
+from google.protobuf import json_format
 from pydantic import BaseModel
+from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client, WorkflowUpdateFailedError, WorkflowUpdateStage
+from temporalio.client import (
+    Client,
+    ScheduleActionExecutionStartWorkflow,
+    WorkflowExecutionStatus,
+    WorkflowUpdateFailedError,
+    WorkflowUpdateStage,
+)
 from temporalio.service import RPCError
 
 from soc import activities, intake, workflow
 from soc.chaos import Chaos
+from soc.codec import EncryptionCodec
 from soc.intake import INTAKE_ID, IntakeWorkflow
 from soc.models import (
     ROSTER,
@@ -34,14 +44,23 @@ from soc.models import (
     ParkRequest,
     ReassignRequest,
 )
+from soc.report import EVERY, SCHEDULE_ID
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
-from soc.worker import WorkerSupervisor
+from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY, case_query
+from soc.worker import WorkerSupervisor, bootstrap
 from soc.workflow import CaseInvestigationWorkflow
 
 E = EventType
 app = FastAPI(title="SOC case console")
+app.add_middleware(  # lets the Temporal UI (another origin) call /codec
+    CORSMiddleware,
+    allow_origins=os.environ.get("CODEC_CORS_ORIGINS", "http://localhost:8233").split(","),
+    allow_methods=["POST"],
+    allow_headers=["content-type", "x-namespace", "authorization"],
+    allow_credentials=True,
+)
 _client: Client | None = None
 _supervisor: WorkerSupervisor | None = None  # set when the worker runs in this process
 _demo_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -118,31 +137,49 @@ async def source(module: str) -> str:
 
 
 @app.get("/api/cases")
-async def list_cases() -> list[dict[str, Any]]:
+async def list_cases(status: str = "", assignee: str = "") -> dict[str, Any]:
+    """The case queue: one Visibility list query on the case search attributes."""
     c = await client()
-    rows: list[dict[str, Any]] = []
-    async for wf in c.list_workflows('WorkflowType="CaseInvestigationWorkflow"', limit=60):
+    if not Settings.from_env().search_attributes:  # fallback: Query every recent case
+        return {"query": "(search attributes off: one Query per case)", "rows": await _queried(c)}
+    query, rows = case_query(status, assignee), list[dict[str, Any]]()
+    async for wf in c.list_workflows(query, limit=100):
         if any(r["id"] == wf.id for r in rows):
             continue  # newest run first; older runs of a re-used case ID live in the Temporal UI
+        sa, memo = wf.typed_search_attributes, await wf.memo()
         rows.append(
             {
                 "id": wf.id,
+                "alert_id": wf.id.removeprefix("case-"),
                 "run_status": wf.status.name if wf.status else "",
                 "started": wf.start_time.isoformat(),
+                "status": sa.get(CASE_STATUS) or "",
+                "assignee": sa.get(ASSIGNEE) or "",
+                "severity": sa.get(SEVERITY) or "",
+                "title": memo.get("title", ""),
+                "host": memo.get("host", ""),
             }
         )
+    return {"query": query, "rows": rows}
+
+
+async def _queried(c: Client) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    async for wf in c.list_workflows('WorkflowType="CaseInvestigationWorkflow"', limit=60):
+        if not any(r["id"] == wf.id for r in rows):
+            rows.append({"id": wf.id, "run_status": wf.status.name if wf.status else ""})
     cases = await asyncio.gather(*(_query(c, r["id"]) for r in rows), return_exceptions=True)
     for row, case in zip(rows, cases, strict=True):
         if isinstance(case, dict):
             alert = case["alert"] or {}
             row |= {
                 "status": case["status"],
+                "assignee": case["assignee"],
+                "alert_id": alert.get("alert_id", ""),
                 "title": alert.get("title", ""),
                 "severity": alert.get("severity", ""),
                 "host": alert.get("host", ""),
-                "assignee": case["assignee"],
-                "parked_until": case["parked_until"],
-                "alert_id": alert.get("alert_id", ""),
+                "started": case["timeline"][0]["at"] if case["timeline"] else "",
             }
     return rows
 
@@ -156,7 +193,11 @@ async def start_case(body: StartBody) -> dict[str, str]:
     settings, c = Settings.from_env(), await client()
     alert_id = Scenario.load(body.scenario, settings.fixtures_dir).alert["alert_id"]
     inp = CaseInput(
-        body.scenario, settings.enable_threat, settings.approval_timeout_s, settings.max_agent_steps
+        body.scenario,
+        settings.enable_threat,
+        settings.approval_timeout_s,
+        settings.max_agent_steps,
+        indexed=settings.search_attributes,
     )
     handle = await c.start_workflow(
         CaseInvestigationWorkflow.run, inp, id=f"case-{alert_id}", task_queue=settings.task_queue
@@ -231,6 +272,53 @@ async def intake_stats() -> dict[str, Any]:
     }
 
 
+@app.post("/codec/{op}")
+async def codec_endpoint(op: str, request: Request) -> Response:
+    """Codec server for the Temporal UI/CLI: it posts {"payloads": [...]} and gets the same shape
+    back, encrypted or decrypted. The key never leaves this process."""
+    codec = EncryptionCodec.from_env()
+    if codec is None or op not in ("encode", "decode"):
+        raise HTTPException(404, "set SOC_CODEC_KEY to enable the codec endpoint")
+    payloads = json_format.Parse(await request.body(), Payloads())
+    done = await (codec.encode if op == "encode" else codec.decode)(payloads.payloads)
+    return Response(
+        json_format.MessageToJson(Payloads(payloads=done)), media_type="application/json"
+    )
+
+
+@app.get("/api/report")
+async def report() -> dict[str, Any]:
+    """The shift-report Schedule: when it runs next, and what its latest run found."""
+    c = await client()
+    try:
+        info = (await c.get_schedule_handle(SCHEDULE_ID).describe()).info
+    except RPCError as err:
+        raise HTTPException(404, err.message) from err
+    latest = None
+    for done in reversed(info.recent_actions):
+        action = done.action
+        if not isinstance(action, ScheduleActionExecutionStartWorkflow):
+            continue
+        run = c.get_workflow_handle(action.workflow_id, run_id=action.first_execution_run_id)
+        if (await run.describe()).status == WorkflowExecutionStatus.COMPLETED:
+            latest = await run.result()
+            break
+    return {
+        "schedule_id": SCHEDULE_ID,
+        "every_h": EVERY.total_seconds() / 3600,
+        "runs": info.num_actions,
+        "next": [t.isoformat() for t in info.next_action_times[:1]],
+        "latest": latest,
+    }
+
+
+@app.post("/api/report")
+async def run_report() -> dict[str, str]:
+    """'Run now': trigger the Schedule once, exactly as if its time had come."""
+    await (await client()).get_schedule_handle(SCHEDULE_ID).trigger()
+    return {"message": f"triggered {SCHEDULE_ID}"}
+
+
 @app.post("/api/seed")
 async def seed(body: SeedBody | None = None) -> dict[str, int]:
     return {"pushed": await Chaos(Settings.from_env()).seed((body or SeedBody()).prefix)}
@@ -279,7 +367,7 @@ async def history(wf_id: str) -> dict[str, Any]:
     c = await client()
     handle = c.get_workflow_handle(wf_id)
     events = [e async for e in handle.fetch_history_events()]
-    bars = HistoryBars(c).build(events)
+    bars = await HistoryBars(c).build(events)
     desc = await handle.describe()
     by_activity_id = {b.get("activity_id"): b for b in bars}
     for p in desc.raw_description.pending_activities:  # a retry in progress is not in history yet
@@ -302,13 +390,13 @@ class HistoryBars:
     decoded so the drawers can show real inputs and outputs."""
 
     def __init__(self, c: Client) -> None:
-        self.decode = c.data_converter.payload_converter.from_payloads
+        self.converter = c.data_converter  # includes the encryption codec, when one is set
 
-    def _payload(self, payloads: Any) -> Any:
-        values = self.decode(payloads.payloads) if payloads.payloads else []
+    async def _payload(self, payloads: Any) -> Any:
+        values = await self.converter.decode(payloads.payloads) if payloads.payloads else []
         return values[0] if len(values) == 1 else values
 
-    def build(self, events: list[Any]) -> list[dict[str, Any]]:
+    async def build(self, events: list[Any]) -> list[dict[str, Any]]:
         bars: list[dict[str, Any]] = []
         by_id: dict[int, dict[str, Any]] = {}
         for e in events:
@@ -325,7 +413,7 @@ class HistoryBars:
                 bars[0]["end"] = at
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
                 a = e.activity_task_scheduled_event_attributes
-                arg = self._payload(a.input)
+                arg = await self._payload(a.input)
                 by_id[e.event_id] = bar = {
                     "kind": "activity",
                     "name": a.activity_type.name,
@@ -347,7 +435,7 @@ class HistoryBars:
                     }
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
                 a = e.activity_task_completed_event_attributes
-                by_id[a.scheduled_event_id] |= {"end": at, "result": self._payload(a.result)}
+                by_id[a.scheduled_event_id] |= {"end": at, "result": await self._payload(a.result)}
             elif t == E.EVENT_TYPE_ACTIVITY_TASK_FAILED:
                 a = e.activity_task_failed_event_attributes
                 by_id[a.scheduled_event_id] |= {
@@ -359,7 +447,7 @@ class HistoryBars:
                 a = e.timer_started_event_attributes
                 secs = a.start_to_fire_timeout.ToSeconds()
                 meta = e.user_metadata.summary if e.HasField("user_metadata") else None
-                summary = self.decode([meta])[0] if meta and meta.data else ""
+                summary = (await self.converter.decode([meta]))[0] if meta and meta.data else ""
                 by_id[e.event_id] = bar = {
                     "kind": "timer",
                     "label": f"{summary or 'timer'} ({_dur(secs)})",
@@ -373,7 +461,7 @@ class HistoryBars:
                 by_id[e.timer_canceled_event_attributes.started_event_id]["end"] = at
             elif t == E.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
                 request = e.workflow_execution_update_accepted_event_attributes.accepted_request
-                arg = self._payload(request.input.args)
+                arg = await self._payload(request.input.args)
                 label = _update_label(request.input.name, arg)
                 bars.append(
                     {"kind": "update", "label": label, "start": at, "end": at, "input": arg}
@@ -386,7 +474,7 @@ class HistoryBars:
                     "child_id": a.workflow_id,
                     "start": at,
                     "end": None,
-                    "input": self._payload(a.input),
+                    "input": await self._payload(a.input),
                 }
                 bars.append(bar)
             elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED:
@@ -395,7 +483,7 @@ class HistoryBars:
                     by_id[a.initiated_event_id]["end"] = at
             elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
                 a = e.child_workflow_execution_completed_event_attributes
-                by_id[a.initiated_event_id] |= {"end": at, "result": self._payload(a.result)}
+                by_id[a.initiated_event_id] |= {"end": at, "result": await self._payload(a.result)}
             elif t == E.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_FAILED:
                 a = e.start_child_workflow_execution_failed_event_attributes
                 by_id[a.initiated_event_id] |= {
@@ -464,7 +552,6 @@ def serve(with_worker: bool) -> None:
         if not with_worker:
             return await server.serve()
         from soc.cli import ensure_mocks
-        from soc.intake import ensure_intake
 
         os.environ.setdefault("FIXTURE_LATENCY_S", "0.7")  # watchable demo pace
         logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # demo faults are expected
@@ -474,7 +561,7 @@ def serve(with_worker: bool) -> None:
         global _supervisor
         _supervisor = WorkerSupervisor(await client(), settings.task_queue)
         _supervisor.start()
-        await ensure_intake(await client(), settings.task_queue)
+        await bootstrap(await client(), settings)
         try:
             await server.serve()
         finally:

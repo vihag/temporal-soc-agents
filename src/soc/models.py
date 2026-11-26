@@ -15,6 +15,11 @@ Route = Literal["autonomous", "collaborative", "review"]
 ROSTER = ("vihag", "aisha", "ben")  # analysts on shift (seeded; no auth in this demo)
 
 
+def next_analyst(current: str) -> str:
+    """Who is after `current` on the roster (the backup for escalations)."""
+    return ROSTER[(ROSTER.index(current) + 1) % len(ROSTER)] if current in ROSTER else ROSTER[0]
+
+
 class Status(StrEnum):
     """Where a case is. Written only by CaseInvestigationWorkflow.run (workflow.py)."""
 
@@ -42,6 +47,7 @@ class CaseInput:
     max_agent_steps: int = 6
     assignee: str = "vihag"
     alert_id: str = ""  # a queued alert's own ID; empty = the recorded scenario's
+    indexed: bool = False  # upsert search attributes (needs them registered; see visibility.py)
 
 
 @dataclass
@@ -166,6 +172,7 @@ class IntakeState:
     recent: list[str] = field(default_factory=list)
     polls_per_run: int = 100
     poll_interval_s: float = 2.0
+    indexed: bool = False  # open cases with search attributes on
 
 
 @dataclass
@@ -266,3 +273,20 @@ class RoutingPolicy:
         ):
             return "autonomous"
         return "collaborative"
+
+
+@dataclass
+class ShiftReport:
+    """What the scheduled shift report found (from Visibility, not by querying each case)."""
+
+    at: str = ""
+    total: int = 0
+    by_status: dict[str, int] = field(default_factory=dict)
+    open_by_assignee: dict[str, int] = field(default_factory=dict)
+    escalated: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        load = ", ".join(f"{k} {v}" for k, v in sorted(self.open_by_assignee.items())) or "none"
+        return f"Shift report: {self.total} cases; open by analyst: {load}; escalated: " + (
+            ", ".join(self.escalated) or "none"
+        )

@@ -8,7 +8,7 @@ is thin: build a client, call it, return a dataclass.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 import httpx
@@ -23,6 +23,7 @@ from soc.models import (
     LLMReply,
     LLMRequest,
     QueueMessage,
+    ShiftReport,
     SoarReceipt,
     SoarSubmit,
     ToolCall,
@@ -31,6 +32,7 @@ from soc.scenarios import Scenario
 from soc.settings import Settings
 from soc.soar import HttpSoarClient
 from soc.tools import TOOLS
+from soc.visibility import ASSIGNEE, CASE_STATUS
 
 T = TypeVar("T")
 
@@ -131,6 +133,25 @@ async def ack_alerts(receipts: list[str]) -> None:
     response.raise_for_status()
 
 
+@activity.defn
+async def shift_report(query: str) -> ShiftReport:
+    """Count cases from Visibility (their search attributes). No case Workflow is touched."""
+    report, seen = ShiftReport(at=datetime.now(UTC).isoformat()), set()
+    async for wf in activity.client().list_workflows(query, limit=1000):
+        if wf.id in seen:
+            continue  # newest run of a re-used case ID only
+        seen.add(wf.id)
+        status = wf.typed_search_attributes.get(CASE_STATUS) or "UNINDEXED"
+        assignee = wf.typed_search_attributes.get(ASSIGNEE) or "-"
+        report.total += 1
+        report.by_status[status] = report.by_status.get(status, 0) + 1
+        if status not in ("SUBMITTED", "AUTO_RESOLVED", "NEEDS_REVIEW"):
+            report.open_by_assignee[assignee] = report.open_by_assignee.get(assignee, 0) + 1
+        if status == "ESCALATED":
+            report.escalated.append(wf.id)
+    return report
+
+
 def _policy(timeout_s: int, attempts: int, max_interval_s: int = 10) -> dict[str, Any]:
     return {
         "start_to_close_timeout": timedelta(seconds=timeout_s),
@@ -151,9 +172,22 @@ OPTIONS: dict[str, dict[str, Any]] = {
     "soar_submit": _policy(15, 5),
     "receive_alerts": _policy(15, 0, max_interval_s=3),
     "ack_alerts": _policy(15, 0, max_interval_s=3),
+    "shift_report": _policy(30, 5),
 }
 
 
+# Model calls go to their own task queue, served by a rate-limited worker (see worker.py), so
+# a burst of cases cannot exceed the model's rate limit and cannot starve the fast Activities.
+LLM_ACTIVITIES = ("llm_create",)
+
+
+def llm_queue(task_queue: str) -> str:
+    return f"{task_queue}-llm"
+
+
 async def call(fn: Callable[[Any], Awaitable[T]], arg: Any) -> T:
-    """Workflow-side helper: run Activity `fn` with its row from OPTIONS."""
-    return await workflow.execute_activity(fn, arg, **OPTIONS[fn.__name__])
+    """Workflow-side helper: run Activity `fn` with its row from OPTIONS (and its task queue)."""
+    options = dict(OPTIONS[fn.__name__])
+    if fn.__name__ in LLM_ACTIVITIES:
+        options["task_queue"] = llm_queue(workflow.info().task_queue)
+    return await workflow.execute_activity(fn, arg, **options)
