@@ -343,7 +343,7 @@ class HistoryBars:
                 a = e.start_child_workflow_execution_initiated_event_attributes
                 by_id[e.event_id] = bar = {
                     "kind": "child",
-                    "label": f"{a.workflow_type.name} · {a.workflow_id}",
+                    "label": f"↳ child {a.workflow_id}",
                     "child_id": a.workflow_id,
                     "start": at,
                     "end": None,

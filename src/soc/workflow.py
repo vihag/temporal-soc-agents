@@ -149,7 +149,8 @@ class CaseInvestigationWorkflow:
     async def _stay_parked(self, resume_as: Status) -> None:
         """PARKED until the park timer fires, the analyst unparks, or decides anyway."""
         until = datetime.fromisoformat(self.case.parked_until)
-        self._enter(Status.PARKED, f"Parked by {self.case.assignee} until {until:%H:%M:%S} UTC")
+        secs = int((until - workflow.now()).total_seconds())
+        self._enter(Status.PARKED, f"Parked by {self.case.assignee} for {secs}s (decide any time)")
         try:
             await workflow.wait_condition(
                 lambda: not self.case.parked_until or self.decision is not None,
