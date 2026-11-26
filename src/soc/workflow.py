@@ -42,10 +42,12 @@ with workflow.unsafe.imports_passed_through():
         SoarSubmit,
         Status,
         TimelineEntry,
+        next_analyst,
     )
     from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY
 
 MAX_REWORK = 2  # an analyst may reject (and send back for re-investigation) at most twice
+PAGE_BACKUP = "page-backup-on-escalation"  # patch id (see the versioning lesson)
 CLOSED = (Status.SUBMITTED, Status.AUTO_RESOLVED, Status.NEEDS_REVIEW)
 
 
@@ -145,6 +147,12 @@ class CaseInvestigationWorkflow:
                     Status.ESCALATED, f"No decision in {inp.approval_timeout_s}s; paged lead"
                 )
                 await call(notify, f"ESCALATION {self.case.case_id}: approval overdue")
+                # v3 adds a second page. Cases already past this point in their history must
+                # replay without it, so the new command sits behind a patch marker: new runs
+                # record the marker and page, old histories (no marker) skip it on replay.
+                if workflow.patched(PAGE_BACKUP):
+                    backup = next_analyst(self.case.assignee)
+                    await call(notify, f"ESCALATION {self.case.case_id}: {backup}, please cover")
         self.awaiting_decision = False
         self.case.decisions.append(self.decision)
         return self.decision

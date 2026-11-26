@@ -15,6 +15,11 @@ Route = Literal["autonomous", "collaborative", "review"]
 ROSTER = ("vihag", "aisha", "ben")  # analysts on shift (seeded; no auth in this demo)
 
 
+def next_analyst(current: str) -> str:
+    """Who is after `current` on the roster (the backup for escalations)."""
+    return ROSTER[(ROSTER.index(current) + 1) % len(ROSTER)] if current in ROSTER else ROSTER[0]
+
+
 class Status(StrEnum):
     """Where a case is. Written only by CaseInvestigationWorkflow.run (workflow.py)."""
 
