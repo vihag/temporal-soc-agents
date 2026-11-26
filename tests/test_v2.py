@@ -4,8 +4,6 @@ model outage that heals."""
 
 from __future__ import annotations
 
-import time
-
 import httpx
 import pytest
 import pytest_asyncio
@@ -67,7 +65,7 @@ async def _proposed_case(env, settings, wf_id: str, scenario: str = "hitl-confir
 
 async def test_intake_round_robin_duplicate_and_queue_outage(intake_env, settings, queue):
     env = intake_env
-    queue.outage_until = time.time() + 2  # the queue is down when intake first polls
+    queue.fail_next = 3  # the queue is down for intake's first three polls
     url = f"http://127.0.0.1:{queue.server_port}/v1/send"
     async with httpx.AsyncClient() as http:  # producers still enqueue during the outage
         for n in (1, 2, 3, 1):  # the 4th message duplicates the 1st
