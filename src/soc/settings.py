@@ -4,14 +4,16 @@ that run during replay, because env vars are not deterministic."""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any
 
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfigProfile
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
 from soc.codec import data_converter
+from soc.models import CaseInput
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -38,25 +40,22 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
-        env = os.environ.get
-        return cls(
-            task_queue=env("TASK_QUEUE", cls.task_queue),
-            grok_client=env("GROK_CLIENT", cls.grok_client),
-            enable_threat=env("ENABLE_THREAT", "1") == "1",
-            approval_timeout_s=int(env("APPROVAL_TIMEOUT_S", str(cls.approval_timeout_s))),
-            max_agent_steps=int(env("MAX_AGENT_STEPS", str(cls.max_agent_steps))),
-            soar_url=env("SOAR_URL", cls.soar_url),
-            splunk_url=env("SPLUNK_URL", cls.splunk_url),
-            mock_grok_url=env("MOCK_GROK_URL", cls.mock_grok_url),
-            queue_url=env("QUEUE_URL", cls.queue_url),
-            xai_api_key=env("XAI_API_KEY", ""),
-            xai_base_url=env("XAI_BASE_URL", cls.xai_base_url),
-            xai_model=env("XAI_MODEL", cls.xai_model),
-            llm_max_tokens=int(env("LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
-            fixture_latency_s=float(env("FIXTURE_LATENCY_S", "0")),
-            fixtures_dir=Path(env("FIXTURES_DIR", str(cls.fixtures_dir))),
-            llm_rate_per_s=float(env("LLM_RATE_PER_S", str(cls.llm_rate_per_s))),
-            search_attributes=env("SEARCH_ATTRIBUTES", "1") == "1",
+        """Each field reads the upper-case env var of the same name (TASK_QUEUE, XAI_API_KEY...)."""
+        values: dict[str, Any] = {}
+        for f in fields(cls):
+            if (raw := os.environ.get(f.name.upper())) is not None:
+                kind: type = type(f.default)
+                values[f.name] = raw == "1" if kind is bool else kind(raw)
+        return cls(**values)
+
+    def case_input(self, scenario: str) -> CaseInput:
+        """The Workflow input for a new case: runtime knobs ride in the input, never env vars."""
+        return CaseInput(
+            scenario,
+            self.enable_threat,
+            self.approval_timeout_s,
+            self.max_agent_steps,
+            indexed=self.search_attributes,
         )
 
 

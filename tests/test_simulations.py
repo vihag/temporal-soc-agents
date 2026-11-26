@@ -3,24 +3,23 @@ takes milliseconds here."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
+from helpers import play
 
 from soc.models import Status
-from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.simulate import SIMULATIONS
 
 
 @pytest.mark.parametrize("name", list(SIMULATIONS))
 async def test_simulation(name, env, settings, soar):
     sim = SIMULATIONS[name]
     log: list[str] = []
-    timed = (
-        sim
-        if name != "approval_timeout_escalated"
-        else sim.__class__(
-            **{**sim.__dict__, "approval_timeout_s": 120}  # the real 2-minute timer, skipped
-        )
-    )
-    case = await run_simulation(env.client, timed, settings, env.sleep, Narrator(log.append))
+    # the real 2-minute approval timer (the registry's 3s one is for the live UI); time-skipping
+    # makes it instant
+    timed = replace(sim, approval_timeout_s=120)
+    case = await play(env, settings, timed, log)
 
     assert case.status == sim.expect
     statuses = [e.status for e in case.timeline]

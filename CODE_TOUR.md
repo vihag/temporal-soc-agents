@@ -24,7 +24,7 @@ Two kinds of code follow from that:
 - **Workflow code** (`workflow.py`, `intake.py`, `report.py`): decisions only. It must be *deterministic*: same history in, same decisions out. No network, no clock, no randomness.
 - **Activity code** (`activities.py`): anything that touches the outside world. Temporal retries Activities and records their results.
 
-A **worker** (src/soc/worker.py#L35) is your process: it polls a **task queue** and runs both kinds of code. The Temporal server stores state and hands out tasks. It never runs your code.
+A **worker** (src/soc/worker.py#L36) is your process: it polls a **task queue** and runs both kinds of code. The Temporal server stores state and hands out tasks. It never runs your code.
 
 *Try it*: press **Seed 8 alerts**, open a case, and look at the right-hand timeline. Every bar is a real history event.
 
@@ -49,8 +49,8 @@ The diagram: [`diagrams/case-states.png`](diagrams/case-states.png).
 
 An Activity is a normal async function marked `@activity.defn`. The Workflow calls it, and Temporal handles timeouts and retries.
 
-- The Activities: [`fetch_alert`](src/soc/activities.py#L54), [`llm_create`](src/soc/activities.py#L64), [`run_tool`](src/soc/activities.py#L90), [`notify`](src/soc/activities.py#L99), [`soar_submit`](src/soc/activities.py#L105).
-- [`OPTIONS`](src/soc/activities.py#L167): every timeout and retry policy in one table. [`call()`](src/soc/activities.py#L188) applies the right row. `0` attempts means "retry until it works" (used for the queue).
+- The Activities: [`fetch_alert`](src/soc/activities.py#L54), [`llm_create`](src/soc/activities.py#L63), [`run_tool`](src/soc/activities.py#L89), [`notify`](src/soc/activities.py#L98), [`soar_submit`](src/soc/activities.py#L104).
+- [`OPTIONS`](src/soc/activities.py#L166): every timeout and retry policy in one table. [`call()`](src/soc/activities.py#L187) applies the right row. `0` attempts means "retry until it works" (used for the queue).
 - The model client is built with [`max_retries=0`](src/soc/llm.py#L37), so only Temporal retries. A 429 becomes [`next_retry_delay`](src/soc/llm.py#L61) = Retry-After.
 - **Self-healing**: `llm_create` validates the model's answer and raises if it is malformed. Temporal retries it, and the next sample is usually fine.
 
@@ -66,7 +66,7 @@ An "agent" here is a small class, not a service. [`Agent._converse()`](src/soc/a
 
 - [`TriageAgent`](src/soc/agents.py#L76), [`EvidenceAgent`](src/soc/agents.py#L89), [`ThreatAgent`](src/soc/agents.py#L100), [`DispositionAgent`](src/soc/agents.py#L111) only declare their instructions and tools.
 - Parallelism is plain [`asyncio.gather`](src/soc/workflow.py#L112) in the Workflow: Evidence and Threat run side by side, and their bars overlap on the timeline.
-- **Rate limiting**: every model call goes to its own task queue, [`<queue>-llm`](src/soc/activities.py#L184). The `-llm` worker sets `max_task_queue_activities_per_second` (`LLM_RATE_PER_S`, default 5). The server enforces it across all workers, so a burst of cases queues up instead of hammering the model.
+- **Rate limiting**: every model call goes to its own task queue, [`<queue>-llm`](src/soc/activities.py#L183). The `-llm` worker sets `max_task_queue_activities_per_second` (`LLM_RATE_PER_S`, default 5). The server enforces it across all workers, so a burst of cases queues up instead of hammering the model.
 
 *Proved by*: `test_agents.py::test_parallel_agents`, `test_agents.py::test_evidence_loop_uses_tools`, `test_versioning.py::test_new_escalations_take_the_patched_branch` (checks the `-llm` queue).
 
@@ -116,7 +116,7 @@ Alerts arrive on an SQS-like queue. [`IntakeWorkflow`](src/soc/intake.py#L27) is
 
 ## Lesson 8: Chaos, durability, replay, determinism
 
-- [`Chaos`](src/soc/chaos.py#L27) flips outage switches on the mocks. [`WorkerSupervisor`](src/soc/worker.py#L75) stops the worker entirely and starts a fresh one.
+- [`Chaos`](src/soc/chaos.py#L26) flips outage switches on the mocks. [`WorkerSupervisor`](src/soc/worker.py#L72) stops the worker entirely and starts a fresh one.
 - **Durability**: with no worker, nothing is lost. Timers keep ticking on the server, and the case simply pauses. The new worker replays the history and carries on. No Activity runs twice.
 - **Determinism**: replay only works if the Workflow makes the same decisions again. So Workflow code uses `workflow.now()` instead of the clock, and keeps all I/O in Activities. The SDK's sandbox catches many mistakes.
 - **Exactly-once effects**: Temporal runs an Activity *at least* once (a lost response means a retry). SOAR is [unique on `case_id`](services/mock_soar.py#L16), so the retry gets the same ticket back. Retries plus an idempotent receiver give exactly-once effects.
@@ -129,13 +129,13 @@ Alerts arrive on an SQS-like queue. [`IntakeWorkflow`](src/soc/intake.py#L27) is
 
 ## Lesson 9: Production features: search attributes, Schedules, versioning, codec
 
-- **Search attributes** ([`visibility.py`](src/soc/visibility.py#L19)): each case [upserts](src/soc/workflow.py#L184) `CaseStatus`, `Assignee`, `Severity`. The case queue is then **one Visibility query** ([`case_query`](src/soc/visibility.py#L38), run by [`list_cases`](src/soc/api.py#L140)) instead of one Query per case. The console shows the query under the filters. The same query works in the Temporal UI.
+- **Search attributes** ([`visibility.py`](src/soc/visibility.py#L19)): each case [upserts](src/soc/workflow.py#L184) `CaseStatus`, `Assignee`, `Severity`. The case queue is then **one Visibility query** ([`case_query`](src/soc/visibility.py#L38), run by [`list_cases`](src/soc/api.py#L138)) instead of one Query per case. The console shows the query under the filters. The same query works in the Temporal UI.
 - **Schedules** ([`report.py`](src/soc/report.py#L35)): a shift report every 8 hours. A Schedule is durable cron owned by the server, with [overlap = SKIP](src/soc/report.py#L53). *Run now* on the Alert intake tab triggers it.
 - **Versioning**: escalation now also pages a backup analyst. Cases already running recorded their history without that step, so the new step sits behind [`workflow.patched`](src/soc/workflow.py#L153). New runs record a marker and page. Old histories replay without it. `tests/histories/` holds histories from the previous release, and CI replays them.
-- **Payload codec** ([`EncryptionCodec`](src/soc/codec.py#L28)): with `SOC_CODEC_KEY` set, alerts, prompts and answers are AES-GCM encrypted before they leave the process. The server stores only ciphertext. The console decrypts, and [`/codec`](src/soc/api.py#L276) lets the Temporal UI decrypt too.
-- **Metrics**: `METRICS_BIND=0.0.0.0:9464` serves SDK metrics for Prometheus ([`_runtime`](src/soc/settings.py#L77)).
-- **Cloud**: [`connect()`](src/soc/settings.py#L63) reads Temporal's standard env config, so Cloud is configuration only. See [`docs/CLOUD.md`](docs/CLOUD.md) and `make cloud`.
-- [`bootstrap()`](src/soc/worker.py#L103) runs the one-time setup (search attributes, intake, schedule). It is idempotent, so any process may run it.
+- **Payload codec** ([`EncryptionCodec`](src/soc/codec.py#L28)): with `SOC_CODEC_KEY` set, alerts, prompts and answers are AES-GCM encrypted before they leave the process. The server stores only ciphertext. The console decrypts, and [`/codec`](src/soc/api.py#L269) lets the Temporal UI decrypt too.
+- **Metrics**: `METRICS_BIND=0.0.0.0:9464` serves SDK metrics for Prometheus ([`_runtime`](src/soc/settings.py#L76)).
+- **Cloud**: [`connect()`](src/soc/settings.py#L62) reads Temporal's standard env config, so Cloud is configuration only. See [`docs/CLOUD.md`](docs/CLOUD.md) and `make cloud`.
+- [`bootstrap()`](src/soc/worker.py#L102) runs the one-time setup (search attributes, intake, schedule). It is idempotent, so any process may run it.
 
 *Proved by*: `test_versioning.py` (both tests), `test_codec.py`, and the e2e runbook (`wait_list` on the PARKED filter, `run_report`).
 
@@ -156,11 +156,11 @@ uv run python -m soc demo run --fast   # or: make demo-fast
 
 | Guarantee | What could go wrong | Where it lives here | What Temporal does for you |
 | --- | --- | --- | --- |
-| **Durability** | A worker crashes mid-investigation; a 2-day park outlives every deploy | Event history on the server; [`WorkerSupervisor`](src/soc/worker.py#L75) drill | Persists every step and timer. A new worker replays and resumes. No checkpoint code |
+| **Durability** | A worker crashes mid-investigation; a 2-day park outlives every deploy | Event history on the server; [`WorkerSupervisor`](src/soc/worker.py#L72) drill | Persists every step and timer. A new worker replays and resumes. No checkpoint code |
 | **Consistency** | Two analysts act at once; someone approves a closed case | Update [validators](src/soc/workflow.py#L218); a single writer of status ([`_enter`](src/soc/workflow.py#L178)) | One Workflow processes its events one at a time, so there are no races on case state. Validators reject requests before they reach history |
 | **Idempotency** | The same alert arrives twice; a queue message is redelivered | Workflow id `case-{alert_id}` + [`REJECT_DUPLICATE`](src/soc/intake.py#L59) | Workflow-id uniqueness makes "start" idempotent; no dedupe table |
-| **Exactly-once effects** | SOAR's response is lost and the ticket is filed twice | [`soar_submit`](src/soc/activities.py#L105) retries + SOAR unique on `case_id` | At-least-once Activities with durable retries. Pair them with an idempotent receiver |
-| **Retries / backpressure** | Grok rate-limits; Splunk times out; the queue is down | [`OPTIONS`](src/soc/activities.py#L167), the `-llm` queue rate limit | Server-side retries with backoff (and Retry-After); task-queue rate limits shared across all workers |
+| **Exactly-once effects** | SOAR's response is lost and the ticket is filed twice | [`soar_submit`](src/soc/activities.py#L104) retries + SOAR unique on `case_id` | At-least-once Activities with durable retries. Pair them with an idempotent receiver |
+| **Retries / backpressure** | Grok rate-limits; Splunk times out; the queue is down | [`OPTIONS`](src/soc/activities.py#L166), the `-llm` queue rate limit | Server-side retries with backoff (and Retry-After); task-queue rate limits shared across all workers |
 | **Timeouts / SLAs** | Nobody approves; a park must end on time | [`wait_condition` + timer](src/soc/workflow.py#L142), park timer | Durable timers that fire even with no worker running |
 | **Visibility** | "Show me ben's parked cases" across thousands | [Search attributes](src/soc/visibility.py#L38) + memo | Indexed Visibility store; list queries in one call, also in the Temporal UI |
 | **Evolvability** | A deploy changes the Workflow while cases are in flight | [`workflow.patched`](src/soc/workflow.py#L153) + replay tests | Patch markers in history; the `Replayer` catches nondeterminism in CI |

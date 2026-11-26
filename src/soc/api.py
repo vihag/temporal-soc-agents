@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import os
 from dataclasses import asdict
 from datetime import datetime
@@ -22,7 +21,6 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from google.protobuf import json_format
 from pydantic import BaseModel
 from temporalio.api.common.v1 import Payloads
-from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
     ScheduleActionExecutionStartWorkflow,
@@ -35,11 +33,11 @@ from temporalio.service import RPCError
 from soc import activities, intake, workflow
 from soc.chaos import Chaos
 from soc.codec import EncryptionCodec
+from soc.history import HistoryBars
 from soc.intake import INTAKE_ID, IntakeWorkflow
 from soc.models import (
     ROSTER,
     AskRequest,
-    CaseInput,
     DecisionRequest,
     ParkRequest,
     ReassignRequest,
@@ -48,11 +46,11 @@ from soc.report import EVERY, SCHEDULE_ID
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.upstream import request_json
 from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY, case_query
-from soc.worker import WorkerSupervisor, bootstrap
+from soc.worker import WorkerSupervisor, bootstrap, quiet_expected_faults
 from soc.workflow import CaseInvestigationWorkflow
 
-E = EventType
 app = FastAPI(title="SOC case console")
 app.add_middleware(  # lets the Temporal UI (another origin) call /codec
     CORSMiddleware,
@@ -192,15 +190,11 @@ async def _query(c: Client, wf_id: str) -> dict[str, Any]:
 async def start_case(body: StartBody) -> dict[str, str]:
     settings, c = Settings.from_env(), await client()
     alert_id = Scenario.load(body.scenario, settings.fixtures_dir).alert["alert_id"]
-    inp = CaseInput(
-        body.scenario,
-        settings.enable_threat,
-        settings.approval_timeout_s,
-        settings.max_agent_steps,
-        indexed=settings.search_attributes,
-    )
     handle = await c.start_workflow(
-        CaseInvestigationWorkflow.run, inp, id=f"case-{alert_id}", task_queue=settings.task_queue
+        CaseInvestigationWorkflow.run,
+        settings.case_input(body.scenario),
+        id=f"case-{alert_id}",
+        task_queue=settings.task_queue,
     )
     return {"id": handle.id}
 
@@ -260,8 +254,7 @@ async def intake_stats() -> dict[str, Any]:
     except RPCError:
         stats = {}
     try:
-        async with httpx.AsyncClient(timeout=2) as http:
-            queue = (await http.get(f"{settings.queue_url}/v1/depth")).json()
+        queue = await request_json("GET", settings.queue_url, "/v1/depth", timeout=2)
     except (httpx.HTTPError, ValueError):
         queue = {"depth": None, "down": True}
     return {
@@ -380,146 +373,6 @@ async def history(wf_id: str) -> dict[str, Any]:
     }
 
 
-def _ts(ts: Any) -> str:
-    return ts.ToDatetime().astimezone().isoformat()
-
-
-class HistoryBars:
-    """Turns raw history events into bars: the workflow, each Activity (`failed_until` marks where
-    failed attempts end and the successful one starts), timers, and Update markers. Payloads are
-    decoded so the drawers can show real inputs and outputs."""
-
-    def __init__(self, c: Client) -> None:
-        self.converter = c.data_converter  # includes the encryption codec, when one is set
-
-    async def _payload(self, payloads: Any) -> Any:
-        values = await self.converter.decode(payloads.payloads) if payloads.payloads else []
-        return values[0] if len(values) == 1 else values
-
-    async def build(self, events: list[Any]) -> list[dict[str, Any]]:
-        bars: list[dict[str, Any]] = []
-        by_id: dict[int, dict[str, Any]] = {}
-        for e in events:
-            t, at = e.event_type, _ts(e.event_time)
-            if t == E.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
-                name = e.workflow_execution_started_event_attributes.workflow_type.name
-                bars.append({"kind": "workflow", "label": name, "start": at, "end": None})
-            elif t in (
-                E.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED,
-                E.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
-                E.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED,
-                E.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW,
-            ):
-                bars[0]["end"] = at
-            elif t == E.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
-                a = e.activity_task_scheduled_event_attributes
-                arg = await self._payload(a.input)
-                by_id[e.event_id] = bar = {
-                    "kind": "activity",
-                    "name": a.activity_type.name,
-                    "label": _label(a.activity_type.name, arg),
-                    "activity_id": a.activity_id,
-                    "start": at,
-                    "end": None,
-                    "input": arg,
-                    "attempt": 1,
-                }
-                bars.append(bar)
-            elif t == E.EVENT_TYPE_ACTIVITY_TASK_STARTED:
-                a = e.activity_task_started_event_attributes
-                if a.attempt > 1:
-                    by_id[a.scheduled_event_id] |= {
-                        "failed_until": at,
-                        "attempt": a.attempt,
-                        "error": a.last_failure.message,
-                    }
-            elif t == E.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
-                a = e.activity_task_completed_event_attributes
-                by_id[a.scheduled_event_id] |= {"end": at, "result": await self._payload(a.result)}
-            elif t == E.EVENT_TYPE_ACTIVITY_TASK_FAILED:
-                a = e.activity_task_failed_event_attributes
-                by_id[a.scheduled_event_id] |= {
-                    "end": at,
-                    "kind": "failed",
-                    "error": a.failure.message,
-                }
-            elif t == E.EVENT_TYPE_TIMER_STARTED:
-                a = e.timer_started_event_attributes
-                secs = a.start_to_fire_timeout.ToSeconds()
-                meta = e.user_metadata.summary if e.HasField("user_metadata") else None
-                summary = (await self.converter.decode([meta]))[0] if meta and meta.data else ""
-                by_id[e.event_id] = bar = {
-                    "kind": "timer",
-                    "label": f"{summary or 'timer'} ({_dur(secs)})",
-                    "start": at,
-                    "end": None,
-                }
-                bars.append(bar)
-            elif t == E.EVENT_TYPE_TIMER_FIRED:
-                by_id[e.timer_fired_event_attributes.started_event_id] |= {"end": at, "fired": True}
-            elif t == E.EVENT_TYPE_TIMER_CANCELED:
-                by_id[e.timer_canceled_event_attributes.started_event_id]["end"] = at
-            elif t == E.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
-                request = e.workflow_execution_update_accepted_event_attributes.accepted_request
-                arg = await self._payload(request.input.args)
-                label = _update_label(request.input.name, arg)
-                bars.append(
-                    {"kind": "update", "label": label, "start": at, "end": at, "input": arg}
-                )
-            elif t == E.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED:
-                a = e.start_child_workflow_execution_initiated_event_attributes
-                by_id[e.event_id] = bar = {
-                    "kind": "child",
-                    "label": f"↳ child {a.workflow_id}",
-                    "child_id": a.workflow_id,
-                    "start": at,
-                    "end": None,
-                    "input": await self._payload(a.input),
-                }
-                bars.append(bar)
-            elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED:
-                a = e.child_workflow_execution_started_event_attributes
-                if a.workflow_type.name == "CaseInvestigationWorkflow":  # abandoned: runs on alone
-                    by_id[a.initiated_event_id]["end"] = at
-            elif t == E.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
-                a = e.child_workflow_execution_completed_event_attributes
-                by_id[a.initiated_event_id] |= {"end": at, "result": await self._payload(a.result)}
-            elif t == E.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_FAILED:
-                a = e.start_child_workflow_execution_failed_event_attributes
-                by_id[a.initiated_event_id] |= {
-                    "end": at,
-                    "kind": "duplicate",
-                    "label": f"⊘ duplicate {by_id[a.initiated_event_id]['child_id']} refused",
-                    "error": "already exists: duplicate alert ignored",
-                }
-        return bars
-
-
-def _dur(secs: int) -> str:
-    return f"{secs // 60}m" if secs >= 120 else f"{secs}s"
-
-
-def _update_label(name: str, arg: Any) -> str:
-    detail = {
-        "decide": lambda: arg.get("decision"),
-        "reassign": lambda: f"→ {arg.get('to_analyst')}",
-        "park": lambda: _dur(int(arg.get("seconds", 0))),
-        "ask": lambda: "agent",
-        "unpark": lambda: arg,
-    }.get(name, lambda: "")()
-    return f"{name}({detail})"
-
-
-def _label(name: str, arg: Any) -> str:
-    if name == "llm_create":
-        return f"llm_create · {arg['agent']} #{arg['step']}"
-    if name == "run_tool":
-        return f"run_tool · {arg['name']}"
-    if name == "fetch_alert":
-        return f"fetch_alert · {arg.get('alert_id') or arg.get('scenario')}"
-    return name
-
-
 @app.post("/api/demo/{name}")
 async def start_demo(name: str) -> dict[str, str]:
     """Self-demo: run a named simulation in the background; the UI watches its real history."""
@@ -554,8 +407,7 @@ def serve(with_worker: bool) -> None:
         from soc.cli import ensure_mocks
 
         os.environ.setdefault("FIXTURE_LATENCY_S", "0.7")  # watchable demo pace
-        logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # demo faults are expected
-        logging.getLogger("temporalio.worker").setLevel(logging.ERROR)
+        quiet_expected_faults()
         settings = Settings.from_env()
         ensure_mocks(settings)
         global _supervisor

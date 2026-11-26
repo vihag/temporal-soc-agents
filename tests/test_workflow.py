@@ -4,14 +4,15 @@ IDs, Update validation, deterministic replay, and a worker restart mid-case."""
 from __future__ import annotations
 
 import pytest
+from helpers import play
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.worker import Replayer
 
 from soc.models import CaseInput, DecisionRequest, Status
-from soc.simulate import SIMULATIONS, Narrator, run_simulation
-from soc.worker import build_worker
+from soc.simulate import Simulation
+from soc.worker import SocWorker
 from soc.workflow import CaseInvestigationWorkflow
 
 
@@ -50,14 +51,8 @@ async def test_duplicate_case_id_and_decide_validation(env, settings):
 
 
 async def test_replay_is_deterministic(env, settings):
-    case = await run_simulation(
-        env.client,
-        SIMULATIONS["reject_then_reinvestigate"].__class__(
-            "replay", "hitl-confirm-01", "", ["reject", "approve"]
-        ),
-        settings,
-        env.sleep,
-        Narrator(lambda _: None),
+    case = await play(
+        env, settings, Simulation("replay", "hitl-confirm-01", "", ["reject", "approve"])
     )
     history = await env.client.get_workflow_handle(case.case_id).fetch_history()
     await Replayer(workflows=[CaseInvestigationWorkflow]).replay_workflow(history)
@@ -75,14 +70,14 @@ async def test_worker_restart_resumes_without_rerunning_activities(env, settings
     )
     # Worker #1 caches nothing, so every task it runs is a replay from history. That also keeps
     # the time-skipping test server from routing the next task to its (dead) sticky queue.
-    worker_1 = build_worker(env.client, queue, max_cached_workflows=0)
+    worker_1 = SocWorker(env.client, queue, max_cached_workflows=0)
     async with worker_1:
         while (
             await handle.query(CaseInvestigationWorkflow.get_case)
         ).status != Status.DISPOSITION_PROPOSED:
             await env.sleep(0.2)
     # worker #1 is gone; the Workflow is still open, waiting durably
-    async with build_worker(env.client, queue):  # worker #2 replays history, then continues
+    async with SocWorker(env.client, queue):  # worker #2 replays history, then continues
         await handle.execute_update(
             CaseInvestigationWorkflow.decide, DecisionRequest("approve", "vihag")
         )

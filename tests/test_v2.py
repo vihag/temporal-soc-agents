@@ -7,7 +7,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
-from temporalio.api.enums.v1 import EventType
+from helpers import attempts_of
 from temporalio.client import WorkflowHandle, WorkflowUpdateFailedError
 from temporalio.testing import WorkflowEnvironment
 
@@ -21,7 +21,7 @@ from soc.models import (
     ReassignRequest,
     Status,
 )
-from soc.worker import build_worker
+from soc.worker import SocWorker
 from soc.workflow import CaseInvestigationWorkflow as CaseWF
 
 
@@ -29,7 +29,7 @@ from soc.workflow import CaseInvestigationWorkflow as CaseWF
 async def intake_env(settings):
     """A throwaway server for the endless intake loop, so its timers never leak into others."""
     async with await WorkflowEnvironment.start_time_skipping() as env:  # noqa: SIM117
-        async with build_worker(env.client, settings.task_queue):
+        async with SocWorker(env.client, settings.task_queue):
             yield env
 
 
@@ -40,19 +40,6 @@ async def _until(env, handle: WorkflowHandle, done, query=CaseWF.get_case, step:
             return value
         await env.sleep(step)
     raise AssertionError("condition never met")
-
-
-async def _attempts(handle: WorkflowHandle, activity: str) -> list[int]:
-    names: dict[int, str] = {}
-    attempts = []
-    async for e in handle.fetch_history_events():
-        if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
-            names[e.event_id] = e.activity_task_scheduled_event_attributes.activity_type.name
-        if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED:
-            a = e.activity_task_started_event_attributes
-            if names[a.scheduled_event_id] == activity:
-                attempts.append(a.attempt)
-    return attempts
 
 
 async def _proposed_case(env, settings, wf_id: str, scenario: str = "hitl-confirm-01"):
@@ -86,7 +73,7 @@ async def test_intake_round_robin_duplicate_and_queue_outage(intake_env, setting
     ]
     assert assignees == ["vihag", "aisha", "ben"]  # round robin
     assert not queue.queue.messages  # everything acknowledged; nothing lost in the outage
-    assert max(await _attempts(intake, "receive_alerts")) > 1  # Temporal retried through it
+    assert max(await attempts_of(intake, "receive_alerts")) > 1  # Temporal retried through it
     await intake.terminate("test done")
 
 
@@ -162,4 +149,4 @@ async def test_model_outage_heals(env, settings, grok):
         case.status == Status.AUTO_RESOLVED and case.alert and case.alert.alert_id == "SPL-T-GROK"
     )
     handle = env.client.get_workflow_handle("case-v2-grok")
-    assert max(await _attempts(handle, "llm_create")) == 4
+    assert max(await attempts_of(handle, "llm_create")) == 4

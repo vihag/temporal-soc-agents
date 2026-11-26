@@ -7,6 +7,7 @@ and Temporal spreads the work across them.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -68,10 +69,6 @@ class SocWorker:
         await asyncio.gather(self.main.__aexit__(*exc), self.llm.__aexit__(*exc))
 
 
-def build_worker(client: Client, task_queue: str, **options: Any) -> SocWorker:
-    return SocWorker(client, task_queue, **options)
-
-
 class WorkerSupervisor:
     """Owns an in-process worker so the chaos panel can stop it and bring it back."""
 
@@ -81,7 +78,7 @@ class WorkerSupervisor:
         self.task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        self.worker = build_worker(self.client, self.task_queue)
+        self.worker = SocWorker(self.client, self.task_queue)
         self.task = asyncio.create_task(self.worker.run())
 
     async def stop(self) -> None:
@@ -95,9 +92,11 @@ class WorkerSupervisor:
         await asyncio.sleep(seconds)
         self.start()
 
-    @property
-    def running(self) -> bool:
-        return self.worker is not None
+
+def quiet_expected_faults() -> None:
+    """Injected faults (demo and simulations) are expected: keep their retries out of the log."""
+    logging.getLogger("temporalio.activity").setLevel(logging.ERROR)
+    logging.getLogger("temporalio.worker").setLevel(logging.ERROR)
 
 
 async def bootstrap(client: Client, settings: Settings) -> None:
@@ -114,7 +113,7 @@ async def run_worker() -> None:
     client = await connect()
     await bootstrap(client, settings)
     print(f"Worker polling task queue {settings.task_queue!r} (LLM: {settings.grok_client})")
-    await build_worker(client, settings.task_queue).run()
+    await SocWorker(client, settings.task_queue).run()
 
 
 if __name__ == "__main__":

@@ -204,8 +204,8 @@ Kept, as ordinary code in the Workflow or on `Case` / `RoutingPolicy`:
 | `TriageAgent`, `DispositionAgent` | `agents.py` | E2: at most one tool, then a structured result |
 | `EvidenceAgent`, `ThreatAgent` | `agents.py` | E3: loop until the model stops or `MAX_AGENT_STEPS` (default 6) |
 | `LLMClient`, `FixtureLLMClient` | `llm.py` | Chat Completions to xAI, or recorded fixtures. Used only from the `llm_create` Activity |
-| `Tool` (base) + one class per tool | `tools.py` | `name`, `schema`, `run()`. Talk to Mock Splunk |
-| `SoarClient`, `HttpSoarClient` | `soar.py` | Submit with the same idempotency behaviour as forge-legion's mock |
+| `Tool` (a small dataclass; `TOOLS` is the table of seven) | `tools.py` | `name`, `schema`, `run()`. Talk to Mock Splunk |
+| `submit_ticket` | `soar.py` | Submit with the same idempotency behaviour as forge-legion's mock |
 | `CaseInvestigationWorkflow` | `workflow.py` | Happy path, Query, Update, timer, `asyncio.gather` |
 
 Activity functions in `activities.py` are thin: they construct a client or tool and call it. That keeps I/O out of the Workflow sandbox without hiding it behind a framework.

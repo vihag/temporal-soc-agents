@@ -8,11 +8,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from helpers import play
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHistory
 from temporalio.worker import Replayer
 
-from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.simulate import SIMULATIONS
 from soc.workflow import PAGE_BACKUP, AskAgentWorkflow, CaseInvestigationWorkflow
 
 HISTORIES = sorted((Path(__file__).parent / "histories").glob("*.json"))
@@ -28,7 +29,7 @@ async def test_previous_release_histories_still_replay(path: Path):
 async def test_new_escalations_take_the_patched_branch(env, settings):
     """A case escalated on today's code records the patch marker and pages the backup."""
     sim = SIMULATIONS["approval_timeout_escalated"]
-    case = await run_simulation(env.client, sim, settings, env.sleep, Narrator(lambda _: None))
+    case = await play(env, settings, sim)
     history = await env.client.get_workflow_handle(case.case_id).fetch_history()
     markers = [e for e in history.events if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED]
     assert any(PAGE_BACKUP.encode() in e.SerializeToString() for e in markers)
