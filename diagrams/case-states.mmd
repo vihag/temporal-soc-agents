@@ -1,16 +1,22 @@
 stateDiagram-v2
-  [*] --> NEW: start CaseInvestigationWorkflow
-  NEW --> TRIAGED: TriageAgent
+  [*] --> NEW: intake starts case-{alert_id}
+  NEW --> ASSIGNED: round-robin analyst (search attributes indexed)
+  ASSIGNED --> TRIAGED: TriageAgent
   TRIAGED --> AUTO_RESOLVED: autonomous policy gates pass
   TRIAGED --> NEEDS_REVIEW: invalid model or route review
   TRIAGED --> INVESTIGATING: collaborative
   INVESTIGATING --> DISPOSITION_PROPOSED: DispositionAgent
   DISPOSITION_PROPOSED --> APPROVED: Update decide approve
   DISPOSITION_PROPOSED --> REJECTED: Update decide reject
-  DISPOSITION_PROPOSED --> ESCALATED: 2-minute timer fires
+  DISPOSITION_PROPOSED --> ESCALATED: approval SLA timer fires (lead + backup paged)
+  DISPOSITION_PROPOSED --> PARKED: Update park (park timer, SLA paused)
+  ESCALATED --> PARKED: Update park
+  PARKED --> DISPOSITION_PROPOSED: park timer fires or Update unpark
+  PARKED --> APPROVED: decide while parked
   REJECTED --> INVESTIGATING: re-investigate
   ESCALATED --> APPROVED: late approve
   ESCALATED --> REJECTED: late reject
   APPROVED --> SUBMITTED: idempotent soar_submit
   AUTO_RESOLVED --> [*]
+  NEEDS_REVIEW --> [*]
   SUBMITTED --> [*]
