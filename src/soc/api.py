@@ -362,6 +362,7 @@ class HistoryBars:
                 by_id[a.initiated_event_id] |= {
                     "end": at,
                     "kind": "duplicate",
+                    "label": f"⊘ duplicate {by_id[a.initiated_event_id]['child_id']} refused",
                     "error": "already exists: duplicate alert ignored",
                 }
         return bars

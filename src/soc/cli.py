@@ -23,6 +23,9 @@ import logging
 import urllib.request
 from typing import Any
 
+from temporalio.client import WorkflowUpdateFailedError
+from temporalio.service import RPCError
+
 from soc.chaos import Chaos
 from soc.models import AskRequest, Case, CaseInput, DecisionRequest, ParkRequest, ReassignRequest
 from soc.scenarios import Scenario
@@ -87,7 +90,12 @@ async def view(workflow_id: str) -> None:
 async def update(workflow_id: str, name: str, arg: Any) -> None:
     """Send one analyst Update (decide / reassign / park / unpark / ask) and show the result."""
     handle = (await connect()).get_workflow_handle(workflow_id)
-    result = await handle.execute_update(name, arg, result_type=Case if name != "ask" else None)
+    try:
+        result = await handle.execute_update(name, arg, result_type=Case if name != "ask" else None)
+    except WorkflowUpdateFailedError as err:  # the validator said no; nothing was recorded
+        raise SystemExit(f"Refused: {err.cause or err}") from err
+    except RPCError as err:  # e.g. the case already finished
+        raise SystemExit(f"Refused: {err.message}") from err
     if isinstance(result, Case):
         print_case(result)
     else:
