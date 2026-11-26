@@ -14,6 +14,8 @@ uv run python -m soc api --with-worker          # console :8080, worker + mocks 
 - Know the cast: analysts **vihag**, **aisha**, **ben** (the switcher, top right; no auth).
 - Optional opener: the **Self demo** tab (`/#demo=activity_failure_retry`): the real `workflow.py` with the live line highlighted, next to the Gantt.
 
+**Hands-free option**: `uv run python -m soc demo run` plays this whole table from [`demo/runbook.yaml`](demo/runbook.yaml), with a caption banner in the console at each step. Talk over it, or pause it with Ctrl-C and drive by hand. `--fast` is the same run as an end-to-end check.
+
 ## The run (≈ 20 min)
 
 | # | Do | Say / point at |
