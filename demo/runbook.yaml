@@ -1,0 +1,73 @@
+# The presenter runbook (DEMO.md) as data. `soc demo run` plays it against a running console
+# (captions appear as a banner in the UI); `soc demo run --fast` is the end-to-end test in CI.
+# Cases are referred to by alert suffix: "1003" means case-{run prefix}-1003.
+# Verbs: caption, pause, seed, alert, chaos, wait_until, act, assert_case, assert_history,
+# assert_intake. Analysts: @assignee, @other, @next (next on the roster).
+name: SOC console tour
+steps:
+  - caption: {text: "Alerts land on an SQS-like queue. IntakeWorkflow turns each one into a case Workflow with id case-{alert_id}."}
+  - seed: {}
+  - alert: {id: "SLA", scenario: hitl-confirm-01, approval_timeout_s: 20}
+  - wait_until: {case: "1001", status: DISPOSITION_PROPOSED}
+  - assert_intake: {path: stats.duplicates, at_least: 1}
+  - caption: {text: "The 8th alert repeated the 1st. Temporal refused a second Workflow with the same id: a duplicate is a no-op."}
+  - wait_until: {case: "1002", status: AUTO_RESOLVED}
+  - wait_until: {case: "1005", status: NEEDS_REVIEW}
+  - wait_until: {case: "1006", status: DISPOSITION_PROPOSED}
+  - wait_until: {case: "1003", status: DISPOSITION_PROPOSED}
+
+  - caption: {text: "Chaos 1: Grok returns 503 for 8 seconds while a new alert arrives. Watch llm_create retry with backoff."}
+  - chaos: {target: grok, seconds: 8}
+  - alert: {id: "2001", scenario: auto-fp-01}
+  - wait_until: {case: "2001", status: AUTO_RESOLVED}
+  - assert_history: {case: "2001", kind: activity, label: llm_create, min_attempt: 2}
+
+  - caption: {text: "Chaos 2: the queue is down. Alerts still enqueue and wait; intake's receive_alerts retries, then drains."}
+  - chaos: {target: queue, seconds: 6}
+  - alert: {id: "2002", scenario: auto-fp-01}
+  - assert_intake: {path: queue_depth, at_least: 1}
+  - wait_until: {case: "2002", status: AUTO_RESOLVED}
+
+  - caption: {text: "Chaos 3: Splunk is down when the alert is fetched. fetch_alert retries; the Workflow never sees the failure."}
+  - chaos: {target: splunk, seconds: 5}
+  - alert: {id: "2003", scenario: auto-fp-01}
+  - wait_until: {case: "2003", status: AUTO_RESOLVED}
+  - assert_history: {case: "2003", kind: activity, label: fetch_alert, min_attempt: 2}
+
+  - caption: {text: "Chaos 4: kill the worker mid-case. With no worker the case just waits; the new worker replays history and carries on."}
+  - alert: {id: "2004", scenario: hitl-confirm-01}
+  - chaos: {target: worker, seconds: 4}
+  - wait_until: {case: "2004", status: DISPOSITION_PROPOSED}
+
+  - caption: {text: "Reassign is a validated Update. First, someone who is not the assignee tries to approve: the validator refuses."}
+  - act: {case: "1006", action: decide, as: "@other", decision: approve, expect: refused}
+  - act: {case: "1006", action: reassign, to: "@next", reason: handover}
+  - assert_history: {case: "1006", kind: update, label: reassign}
+  - caption: {text: "The new analyst sees the full timeline and continues at the same step."}
+
+  - caption: {text: "Park: a durable timer. The approval SLA does not run while the case is parked."}
+  - act: {case: "1003", action: park, seconds: 300, reason: "waiting on HR"}
+  - wait_until: {case: "1003", status: PARKED}
+  - assert_history: {case: "1003", kind: timer, label: park timer}
+
+  - caption: {text: "Ask an agent: the Update starts a child Workflow that loops over tools, incl. exemption tickets."}
+  - act: {case: "1003", action: ask, question: "Any exemption tickets for this user this week?"}
+  - wait_until: {case: "1003", path: "questions[].answer", contains: "No open exemption covers m.tan this week; the last one expired 12 days ago."}
+  - assert_case: {case: "1003", path: "evidence[].source", contains: lookup_exemptions}
+  - assert_history: {case: "1003", kind: child, label: ask-1}
+  - act: {case: "1003", action: unpark}
+  - wait_until: {case: "1003", status: DISPOSITION_PROPOSED}
+
+  - caption: {text: "Approve: an Update, then the SOAR submit Activity."}
+  - act: {case: "1001", action: decide, decision: approve, rationale: "matches the alert"}
+  - wait_until: {case: "1001", status: SUBMITTED}
+
+  - caption: {text: "Exactly-once: this case's SOAR reply is lost once. The retry returns the same ticket, created=false."}
+  - act: {case: "1004", action: decide, decision: approve, rationale: confirmed}
+  - wait_until: {case: "1004", status: SUBMITTED}
+  - assert_case: {case: "1004", path: soar.created, equals: false}
+
+  - caption: {text: "SLA breach: nobody touched the 20-second alert, so its durable timer fired and the lead was paged."}
+  - wait_until: {case: "SLA", status: ESCALATED, timeout: 60}
+  - assert_history: {case: "SLA", kind: timer, label: approval SLA, fired: true}
+  - caption: {text: "That's the tour. Every bar you saw came from the real Temporal event history.", pause: 3}

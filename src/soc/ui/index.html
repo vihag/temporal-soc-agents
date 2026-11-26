@@ -20,7 +20,7 @@ header.top{display:flex;align-items:center;gap:18px;padding:12px 20px;border-bot
 .s-SUBMITTED,.s-AUTO_RESOLVED,.s-APPROVED{background:#064e3b;color:var(--ok)}.s-ESCALATED,.s-REJECTED,.s-NEEDS_REVIEW{background:#4c1d1d;color:var(--bad)}
 .s-DISPOSITION_PROPOSED{background:#4a3b0b;color:var(--warn)}.s-INVESTIGATING,.s-TRIAGED,.s-NEW{background:#1e2a4a;color:var(--blue)}
 main{display:none;height:calc(100vh - 57px)}main.on{display:flex}
-body.chaos main{height:calc(100vh - 107px)}
+body.chaos main{height:calc(100vh - 107px)}body.cap main{height:calc(100vh - 100px)}body.chaos.cap main{height:calc(100vh - 150px)}
 /* cases view */
 #queue{width:330px;flex:none;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
 #queue .bar{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--line)}
@@ -65,6 +65,7 @@ body.chaos main{height:calc(100vh - 107px)}
 .actions .sep{width:1px;height:24px;background:var(--line)}
 #chaosbar{display:none;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid var(--line);background:#1a0f14}body.chaos #chaosbar{display:flex}
 #chaosbar button{font-size:12px;padding:4px 10px;border-color:#7f1d1d}#chaosbar input{width:54px;background:#0b0b14;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:3px}
+#caption{display:none;padding:10px 20px;background:linear-gradient(90deg,#2e1f5e,#12121f);border-bottom:1px solid var(--accent);font-size:15px}#caption.on{display:block}#caption b{color:var(--accent2);margin-right:10px}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:8px 16px;display:none;z-index:20}
 .k-child{background:var(--blue)}.k-duplicate{background:#6b7280}
 #intake{flex-direction:column}.stats{display:flex;gap:12px;padding:14px 20px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 16px;min-width:130px}.stat b{font-size:22px;display:block}
@@ -80,6 +81,7 @@ body.chaos main{height:calc(100vh - 107px)}
   <button onclick="document.body.classList.toggle('chaos')">⚡ Chaos</button>
   <a id="tui" target="_blank">Temporal UI ↗</a>
 </header>
+<div id="caption"><b id="capstep"></b><span id="captext"></span></div>
 <div id="chaosbar">
   <b class="small" style="color:var(--bad)">Chaos panel</b><span class="small dim">for</span><input id="csecs" type="number" value="20"><span class="small dim">s:</span>
   <button onclick="chaos('queue')">Queue down</button><button onclick="chaos('splunk')">Splunk down</button>
@@ -279,6 +281,13 @@ async function loadIntake(){
   gantt('irows', 'intake', [wf, ...keep.slice(-40)], h, 'alert-intake', 40);
 }
 
+/* ---------- demo director captions (soc demo run) ---------- */
+async function pollCaption(){
+  const c = await api('/api/caption').catch(() => ({}));
+  document.body.classList.toggle('cap', !!c.text); $('caption').classList.toggle('on', !!c.text);
+  $('capstep').textContent = c.total ? `Step ${c.step}/${c.total}` : ''; $('captext').textContent = c.text || '';
+}
+
 /* ---------- self demo ---------- */
 function showStory(){ const s = META.simulations.find(s => s.name === $('sim').value); $('story').textContent = s ? s.story : ''; }
 async function startDemo(){
@@ -329,6 +338,7 @@ async function pollDemo(){
   const caseLink = location.hash.match(/^#case=([\w-]+)/); if (caseLink) { setView('all'); openCase(caseLink[1]); }
   if (location.hash === '#intake') tab('intake');
   if (location.hash.includes('chaos')) document.body.classList.add('chaos');
+  setInterval(pollCaption, 1000);
   setInterval(pollDemo, 1000);
   setInterval(() => { if ($('cases').classList.contains('on')) renderCase().catch(() => {}); }, 1000);
   setInterval(() => { if ($('cases').classList.contains('on') && !busy()) loadQueue().catch(() => {}); }, 3000);

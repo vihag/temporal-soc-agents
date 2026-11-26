@@ -19,6 +19,15 @@ uv run python -m soc seed                       # terminal 3: push 8 alerts (one
 
 Open http://localhost:8080. **Cases** is the console (pick who you are top right; *My cases* / *All cases*; filters). **Alert intake** shows the intake loop. **Self demo** runs the five narrated scenarios. **⚡ Chaos** opens the chaos panel.
 
+### Let the demo director drive
+
+```bash
+uv run python -m soc demo run                   # plays demo/runbook.yaml; captions appear in the console
+uv run python -m soc demo run --fast            # same runbook, no pauses: the end-to-end check (~1 min)
+```
+
+The runbook is plain YAML: `seed`, `alert`, `chaos`, `act` (an analyst Update), `wait_until`, `assert_case`, `assert_history`, `assert_intake`, `caption`, `pause`. `tests/test_e2e.py` plays it on a real dev server in CI.
+
 ## Quickstart (Docker Compose)
 
 ```bash
@@ -42,7 +51,7 @@ uv run python -m soc ask case-SPL-2026-1003 "Any exemption tickets for this user
 uv run python -m soc decide case-SPL-2026-1001 approve --analyst vihag --rationale "matches"
 uv run python -m soc simulate --all                           # five narrated self-driving scenarios
 uv run python -m soc worker                                   # a standalone worker (also starts intake)
-uv run pytest -q                                              # 26 tests on a time-skipping server
+uv run pytest -q                                              # 27 tests: time-skipping + one e2e on a dev server
 ```
 
 To run every process separately: `python -m services.mock_splunk` (:8001), `mock_soar` (:8002), `mock_grok` (:8003), `mock_queue` (:8004), then `python -m soc worker` and `python -m soc api`.
