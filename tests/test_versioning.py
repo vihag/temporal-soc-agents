@@ -38,4 +38,10 @@ async def test_new_escalations_take_the_patched_branch(env, settings):
         if e.activity_task_scheduled_event_attributes.activity_type.name == "notify"
     ]
     assert len(notifies) == 3  # awaiting approval, escalation, and the new backup page
+    llm_queues = {
+        e.activity_task_scheduled_event_attributes.task_queue.name
+        for e in history.events
+        if e.activity_task_scheduled_event_attributes.activity_type.name == "llm_create"
+    }
+    assert llm_queues == {f"{settings.task_queue}-llm"}  # model calls use the rate-limited queue
     await Replayer(workflows=[CaseInvestigationWorkflow, AskAgentWorkflow]).replay_workflow(history)

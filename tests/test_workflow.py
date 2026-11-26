@@ -7,11 +7,11 @@ import pytest
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.exceptions import WorkflowAlreadyStartedError
-from temporalio.worker import Replayer, Worker
+from temporalio.worker import Replayer
 
 from soc.models import CaseInput, DecisionRequest, Status
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
-from soc.worker import ACTIVITIES, build_worker
+from soc.worker import build_worker
 from soc.workflow import CaseInvestigationWorkflow
 
 
@@ -75,13 +75,7 @@ async def test_worker_restart_resumes_without_rerunning_activities(env, settings
     )
     # Worker #1 caches nothing, so every task it runs is a replay from history. That also keeps
     # the time-skipping test server from routing the next task to its (dead) sticky queue.
-    worker_1 = Worker(
-        env.client,
-        task_queue=queue,
-        workflows=[CaseInvestigationWorkflow],
-        activities=ACTIVITIES,
-        max_cached_workflows=0,
-    )
+    worker_1 = build_worker(env.client, queue, max_cached_workflows=0)
     async with worker_1:
         while (
             await handle.query(CaseInvestigationWorkflow.get_case)

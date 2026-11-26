@@ -176,6 +176,18 @@ OPTIONS: dict[str, dict[str, Any]] = {
 }
 
 
+# Model calls go to their own task queue, served by a rate-limited worker (see worker.py), so
+# a burst of cases cannot exceed the model's rate limit and cannot starve the fast Activities.
+LLM_ACTIVITIES = ("llm_create",)
+
+
+def llm_queue(task_queue: str) -> str:
+    return f"{task_queue}-llm"
+
+
 async def call(fn: Callable[[Any], Awaitable[T]], arg: Any) -> T:
-    """Workflow-side helper: run Activity `fn` with its row from OPTIONS."""
-    return await workflow.execute_activity(fn, arg, **OPTIONS[fn.__name__])
+    """Workflow-side helper: run Activity `fn` with its row from OPTIONS (and its task queue)."""
+    options = dict(OPTIONS[fn.__name__])
+    if fn.__name__ in LLM_ACTIVITIES:
+        options["task_queue"] = llm_queue(workflow.info().task_queue)
+    return await workflow.execute_activity(fn, arg, **options)

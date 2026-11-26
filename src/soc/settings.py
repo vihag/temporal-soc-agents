@@ -30,6 +30,7 @@ class Settings:
     llm_max_tokens: int = 800
     fixture_latency_s: float = 0.0  # Mock Grok "thinking" time, so the UI demo is watchable
     fixtures_dir: Path = REPO_ROOT / "fixtures" / "scenarios"
+    llm_rate_per_s: float = 5.0  # model calls per second, across all workers (server-enforced)
     search_attributes: bool = True  # index cases (CaseStatus/Assignee/Severity) for Visibility
 
     @classmethod
@@ -51,6 +52,7 @@ class Settings:
             llm_max_tokens=int(env("LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
             fixture_latency_s=float(env("FIXTURE_LATENCY_S", "0")),
             fixtures_dir=Path(env("FIXTURES_DIR", str(cls.fixtures_dir))),
+            llm_rate_per_s=float(env("LLM_RATE_PER_S", str(cls.llm_rate_per_s))),
             search_attributes=env("SEARCH_ATTRIBUTES", "1") == "1",
         )
 
