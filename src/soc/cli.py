@@ -1,11 +1,15 @@
-"""Command line: run the worker, drive a case by hand, or run the self-driving simulations.
+"""Command line: run the processes, drive a case by hand, seed alerts, break things, simulate.
 
+    python -m soc api --with-worker   # console on :8080 (+ worker and mocks in-process)
     python -m soc worker
-    python -m soc api --with-worker   # UI on :8080 (+ worker and mocks in-process)
-    python -m soc start --scenario hitl-confirm-01
-    python -m soc view case-SPL-2026-0001
-    python -m soc decide case-SPL-2026-0001 approve --analyst vihag --rationale "matches"
-    python -m soc simulate --all
+    python -m soc seed                # push 8 alerts onto the queue (one is a duplicate)
+    python -m soc chaos splunk 20     # queue | splunk | grok | grok429 | soar, for N seconds
+    python -m soc view case-SPL-2026-1001
+    python -m soc decide case-SPL-2026-1001 approve --analyst vihag --rationale "matches"
+    python -m soc reassign case-SPL-2026-1006 aisha --by vihag --reason "urgent leave"
+    python -m soc park case-SPL-2026-1006 120 --analyst aisha
+    python -m soc ask case-SPL-2026-1003 "exemption tickets this week for this user?"
+    python -m soc simulate --all      # five narrated self-driving scenarios
     python -m soc grok-smoke          # one live Grok call; exits 2 if XAI_API_KEY is unset
 
 The CLI talks to Temporal directly (start, Query, Update); it never holds case state itself.
@@ -17,8 +21,10 @@ import argparse
 import asyncio
 import logging
 import urllib.request
+from typing import Any
 
-from soc.models import Case, CaseInput, DecisionRequest
+from soc.chaos import Chaos
+from soc.models import AskRequest, Case, CaseInput, DecisionRequest, ParkRequest, ReassignRequest
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
@@ -27,7 +33,7 @@ from soc.workflow import CaseInvestigationWorkflow
 
 
 def print_case(case: Case) -> None:
-    print(f"{case.case_id}  [{case.status}]  route={case.route or '-'}")
+    print(f"{case.case_id}  [{case.status}]  assignee={case.assignee}  route={case.route or '-'}")
     if case.alert:
         print(f"  alert: {case.alert.title} on {case.alert.host} ({case.alert.user})")
     Narrator().case(case)
@@ -37,6 +43,27 @@ def print_case(case: Case) -> None:
         print(f"  disposition: {case.disposition.action} - {case.disposition.rationale}")
     if case.soar:
         print(f"  SOAR: {case.soar.soar_id} (created={case.soar.created})")
+
+
+def ensure_mocks(settings: Settings) -> None:
+    """Start any mock service that is not already running, in-process."""
+    from services.common import serve_in_thread
+    from services.mock_grok import grok_server
+    from services.mock_queue import queue_server
+    from services.mock_soar import soar_server
+    from services.mock_splunk import splunk_server
+
+    mocks: list[tuple[str, Any]] = [
+        (settings.splunk_url, splunk_server),
+        (settings.soar_url, soar_server),
+        (settings.mock_grok_url.removesuffix("/v1"), grok_server),
+        (settings.queue_url, queue_server),
+    ]
+    for url, factory in mocks:
+        try:
+            urllib.request.urlopen(f"{url}/healthz", timeout=1)
+        except OSError:
+            serve_in_thread(factory(int(url.rsplit(":", 1)[1])))
 
 
 async def start(scenario: str) -> None:
@@ -53,38 +80,28 @@ async def start(scenario: str) -> None:
 
 
 async def view(workflow_id: str) -> None:
-    client = await connect()
-    print_case(
-        await client.get_workflow_handle(workflow_id).query(CaseInvestigationWorkflow.get_case)
-    )
+    handle = (await connect()).get_workflow_handle(workflow_id)
+    print_case(await handle.query(CaseInvestigationWorkflow.get_case))
 
 
-async def decide(workflow_id: str, decision: str, analyst: str, rationale: str) -> None:
-    client = await connect()
-    request = DecisionRequest(decision, analyst, rationale)  # type: ignore[arg-type]
-    handle = client.get_workflow_handle(workflow_id)
-    print_case(await handle.execute_update(CaseInvestigationWorkflow.decide, request))
-
-
-def ensure_mocks(settings: Settings) -> None:
-    """Start Mock Splunk / Mock SOAR in-process unless they are already running."""
-    from services.common import serve_in_thread
-    from services.mock_soar import soar_server
-    from services.mock_splunk import splunk_server
-
-    for url, factory in ((settings.splunk_url, splunk_server), (settings.soar_url, soar_server)):
-        try:
-            urllib.request.urlopen(f"{url}/healthz", timeout=1)
-        except OSError:
-            serve_in_thread(factory(int(url.rsplit(":", 1)[1])))
+async def update(workflow_id: str, name: str, arg: Any) -> None:
+    """Send one analyst Update (decide / reassign / park / unpark / ask) and show the result."""
+    handle = (await connect()).get_workflow_handle(workflow_id)
+    result = await handle.execute_update(name, arg, result_type=Case if name != "ask" else None)
+    if isinstance(result, Case):
+        print_case(result)
+    else:
+        print(f"Agent answered: {result['answer']}")
 
 
 async def grok_smoke() -> int:
-    """One live triage turn against Grok. Exit 2 without a key (never spends by accident)."""
+    """One live call against Grok. Exit 2 without a key (never spends by accident)."""
+    from dataclasses import replace
+
     from soc.llm import GrokClient
     from soc.models import LLMRequest
 
-    settings = Settings.from_env()
+    settings = replace(Settings.from_env(), grok_client="http")
     if not settings.xai_api_key:
         print("XAI_API_KEY is not set; skipping live Grok smoke test.")
         return 2
@@ -95,8 +112,7 @@ async def grok_smoke() -> int:
 
 
 async def simulate(names: list[str]) -> None:
-    """Run scenarios end to end against the configured Temporal server, with an in-process
-    worker and (if not already running) the mock services."""
+    """Run scenarios end to end with an in-process worker and (if needed) the mock services."""
     settings = Settings.from_env()
     logging.getLogger("temporalio.activity").setLevel(logging.ERROR)  # injected faults are expected
     logging.getLogger("temporalio.worker").setLevel(logging.ERROR)
@@ -112,11 +128,21 @@ async def simulate(names: list[str]) -> None:
     print("\nBrowse every run, event by event, in the Temporal UI: http://localhost:8233")
 
 
+async def chaos(target: str, seconds: float) -> None:
+    code = 429 if target == "grok429" else 503
+    print(await Chaos(Settings.from_env()).outage(target.removesuffix("429"), seconds, code))
+
+
+async def seed() -> None:
+    count = await Chaos(Settings.from_env()).seed()
+    print(f"Pushed {count} alerts onto the queue (the last one duplicates the first).")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="soc", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("worker")
-    sub.add_parser("grok-smoke")
+    for name in ("worker", "grok-smoke", "seed"):
+        sub.add_parser(name)
     sub.add_parser("api").add_argument("--with-worker", action="store_true")
     sub.add_parser("start").add_argument("--scenario", default="hitl-confirm-01")
     sub.add_parser("view").add_argument("workflow_id")
@@ -125,6 +151,25 @@ def main() -> None:
     d.add_argument("decision", choices=["approve", "reject"])
     d.add_argument("--analyst", default="vihag")
     d.add_argument("--rationale", default="")
+    r = sub.add_parser("reassign")
+    r.add_argument("workflow_id")
+    r.add_argument("to")
+    r.add_argument("--by", default="vihag")
+    r.add_argument("--reason", default="")
+    p = sub.add_parser("park")
+    p.add_argument("workflow_id")
+    p.add_argument("seconds", type=int)
+    p.add_argument("--analyst", default="vihag")
+    u = sub.add_parser("unpark")
+    u.add_argument("workflow_id")
+    u.add_argument("--analyst", default="vihag")
+    a = sub.add_parser("ask")
+    a.add_argument("workflow_id")
+    a.add_argument("question")
+    a.add_argument("--analyst", default="vihag")
+    c = sub.add_parser("chaos")
+    c.add_argument("target", choices=["queue", "splunk", "grok", "grok429", "soar"])
+    c.add_argument("seconds", type=float)
     s = sub.add_parser("simulate")
     s.add_argument("names", nargs="*", help="any of: " + ", ".join(SIMULATIONS))
     s.add_argument("--all", action="store_true")
@@ -135,17 +180,31 @@ def main() -> None:
     match args.cmd:
         case "worker":
             asyncio.run(run_worker())
-        case "start":
-            asyncio.run(start(args.scenario))
-        case "view":
-            asyncio.run(view(args.workflow_id))
-        case "decide":
-            asyncio.run(decide(args.workflow_id, args.decision, args.analyst, args.rationale))
         case "api":
             from soc.api import serve
 
             serve(args.with_worker)
         case "grok-smoke":
             raise SystemExit(asyncio.run(grok_smoke()))
+        case "seed":
+            asyncio.run(seed())
+        case "chaos":
+            asyncio.run(chaos(args.target, args.seconds))
+        case "start":
+            asyncio.run(start(args.scenario))
+        case "view":
+            asyncio.run(view(args.workflow_id))
+        case "decide":
+            req = DecisionRequest(args.decision, args.analyst, args.rationale)  # type: ignore[arg-type]
+            asyncio.run(update(args.workflow_id, "decide", req))
+        case "reassign":
+            req2 = ReassignRequest(args.to, args.by, args.reason)
+            asyncio.run(update(args.workflow_id, "reassign", req2))
+        case "park":
+            asyncio.run(update(args.workflow_id, "park", ParkRequest(args.seconds, args.analyst)))
+        case "unpark":
+            asyncio.run(update(args.workflow_id, "unpark", args.analyst))
+        case "ask":
+            asyncio.run(update(args.workflow_id, "ask", AskRequest(args.question, args.analyst)))
         case "simulate":
             asyncio.run(simulate(list(SIMULATIONS) if args.all or not args.names else args.names))

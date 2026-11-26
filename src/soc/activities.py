@@ -16,8 +16,17 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
-from soc.llm import make_llm_client
-from soc.models import Alert, LLMReply, LLMRequest, SoarReceipt, SoarSubmit, ToolCall
+from soc.llm import GrokClient
+from soc.models import (
+    Alert,
+    CaseInput,
+    LLMReply,
+    LLMRequest,
+    QueueMessage,
+    SoarReceipt,
+    SoarSubmit,
+    ToolCall,
+)
 from soc.scenarios import Scenario
 from soc.settings import Settings
 from soc.soar import HttpSoarClient
@@ -40,10 +49,11 @@ def _maybe_fail(scenario: Scenario, name: str) -> None:
 
 
 @activity.defn
-async def fetch_alert(scenario_name: str) -> Alert:
-    _maybe_fail(_scenario(scenario_name), "fetch_alert")
+async def fetch_alert(inp: CaseInput) -> Alert:
+    _maybe_fail(_scenario(inp.scenario), "fetch_alert")
+    params = {"scenario": inp.scenario, "alert_id": inp.alert_id}
     async with httpx.AsyncClient(base_url=Settings.from_env().splunk_url, timeout=10) as http:
-        response = await http.get("/v1/alert", params={"scenario": scenario_name})
+        response = await http.get("/v1/alert", params=params)
     response.raise_for_status()
     return Alert(**response.json())
 
@@ -54,7 +64,7 @@ async def llm_create(request: LLMRequest) -> LLMReply:
     (missing keys, unknown tool) raises, and Temporal retries the call: a fresh sample."""
     scenario, settings = _scenario(request.scenario), Settings.from_env()
     _maybe_fail(scenario, "llm_create")
-    reply = await make_llm_client(settings).complete(request)
+    reply = await GrokClient(settings).complete(request)
     garble = scenario.fault(f"llm_invalid:{request.agent}")
     if isinstance(garble, int) and activity.info().attempt <= garble:  # simulated model glitch
         reply = LLMReply(reply.model, content={"unparsed": "Sure! Here is my analysis..."})
@@ -102,22 +112,45 @@ async def soar_submit(request: SoarSubmit) -> SoarReceipt:
     return receipt
 
 
-def _policy(timeout_s: int, attempts: int) -> dict[str, Any]:
+@activity.defn
+async def receive_alerts(max_messages: int) -> list[QueueMessage]:
+    """Long-poll the alert queue. While the queue is down this fails and Temporal keeps
+    retrying (no attempt limit): alerts wait safely in the queue until it recovers."""
+    async with httpx.AsyncClient(base_url=Settings.from_env().queue_url, timeout=10) as http:
+        response = await http.post("/v1/receive", json={"max": max_messages})
+    response.raise_for_status()
+    return [QueueMessage(**m) for m in response.json()]
+
+
+@activity.defn
+async def ack_alerts(receipts: list[str]) -> None:
+    """Delete messages only after their cases exist, so a crash in between means redelivery,
+    and redelivery is a harmless duplicate (case IDs are unique)."""
+    async with httpx.AsyncClient(base_url=Settings.from_env().queue_url, timeout=10) as http:
+        response = await http.post("/v1/delete", json={"receipts": receipts})
+    response.raise_for_status()
+
+
+def _policy(timeout_s: int, attempts: int, max_interval_s: int = 10) -> dict[str, Any]:
     return {
         "start_to_close_timeout": timedelta(seconds=timeout_s),
         "retry_policy": RetryPolicy(
-            initial_interval=timedelta(seconds=1), maximum_attempts=attempts
+            initial_interval=timedelta(seconds=1),
+            maximum_interval=timedelta(seconds=max_interval_s),
+            maximum_attempts=attempts,  # 0 = retry until it works
         ),
     }
 
 
 # Timeouts and retries for each Activity, in one table (DESIGN.md 6.4).
 OPTIONS: dict[str, dict[str, Any]] = {
-    "fetch_alert": _policy(10, 3),
-    "llm_create": _policy(30, 5),
-    "run_tool": _policy(15, 3),
+    "fetch_alert": _policy(10, 10),
+    "llm_create": _policy(30, 10),
+    "run_tool": _policy(15, 10),
     "notify": _policy(10, 3),
     "soar_submit": _policy(15, 5),
+    "receive_alerts": _policy(15, 0, max_interval_s=3),
+    "ack_alerts": _policy(15, 0, max_interval_s=3),
 }
 
 

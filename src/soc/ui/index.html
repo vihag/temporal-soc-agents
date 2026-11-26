@@ -20,11 +20,13 @@ header.top{display:flex;align-items:center;gap:18px;padding:12px 20px;border-bot
 .s-SUBMITTED,.s-AUTO_RESOLVED,.s-APPROVED{background:#064e3b;color:var(--ok)}.s-ESCALATED,.s-REJECTED,.s-NEEDS_REVIEW{background:#4c1d1d;color:var(--bad)}
 .s-DISPOSITION_PROPOSED{background:#4a3b0b;color:var(--warn)}.s-INVESTIGATING,.s-TRIAGED,.s-NEW{background:#1e2a4a;color:var(--blue)}
 main{display:none;height:calc(100vh - 57px)}main.on{display:flex}
+body.chaos main{height:calc(100vh - 107px)}
 /* cases view */
-#queue{width:360px;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
+#queue{width:330px;flex:none;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
 #queue .bar{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--line)}
 .qrow{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}.qrow:hover,.qrow.on{background:var(--panel2)}
-#detail{flex:1;overflow:auto;padding:20px 28px}
+#detail{flex:1;min-width:0;overflow:auto;padding:18px 22px}
+#live{width:40%;flex:none;overflow:auto;border-left:1px solid var(--line);background:var(--panel)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
 .card h3{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
 .banner{border-color:var(--warn);display:flex;align-items:center;gap:12px}
@@ -55,21 +57,56 @@ main{display:none;height:calc(100vh - 57px)}main.on{display:flex}
 #drawer.on{transform:none}#drawer header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
 #dbody{overflow:auto;padding:16px 18px}#dbody pre{background:#0b0b14;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:340px}
 .x{background:none;border:none;font-size:22px}
+.s-ASSIGNED{background:#1e2a4a;color:var(--blue)}.s-PARKED{background:#2e1f5e;color:var(--accent2)}
+.who{display:inline-block;padding:0 7px;border-radius:6px;font-size:11px;background:#23233a;color:var(--accent2)}
+.filters{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}.filters select{padding:3px 6px;font-size:12px}
+.seg button{border-radius:0;padding:3px 10px;font-size:12px}.seg button:first-child{border-radius:8px 0 0 8px}.seg button:last-child{border-radius:0 8px 8px 0}.seg button.on{background:var(--accent);border-color:var(--accent)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.actions input,.actions select{background:#0b0b14;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px}
+.actions .sep{width:1px;height:24px;background:var(--line)}
+#chaosbar{display:none;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid var(--line);background:#1a0f14}body.chaos #chaosbar{display:flex}
+#chaosbar button{font-size:12px;padding:4px 10px;border-color:#7f1d1d}#chaosbar input{width:54px;background:#0b0b14;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:3px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:8px 16px;display:none;z-index:20}
+.k-child{background:var(--blue)}.k-duplicate{background:#6b7280}
+#intake{flex-direction:column}.stats{display:flex;gap:12px;padding:14px 20px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 16px;min-width:130px}.stat b{font-size:22px;display:block}
+.ipanes{display:flex;flex:1;min-height:0;border-top:1px solid var(--line)}#ilog{width:40%;overflow:auto;padding:10px 20px}#igantt{flex:1;overflow:auto;background:var(--panel);border-left:1px solid var(--line)}
 </style>
 </head>
 <body>
 <header class="top">
   <div class="brand">SOC Console <span>· durable agents on Temporal</span></div>
-  <nav class="tabs"><button id="t-cases" class="on" onclick="tab('cases')">Cases</button><button id="t-demo" onclick="tab('demo')">Self demo</button></nav>
-  <div class="grow"></div><a id="tui" target="_blank">Temporal UI ↗</a>
+  <nav class="tabs"><button id="t-cases" class="on" onclick="tab('cases')">Cases</button><button id="t-intake" onclick="tab('intake')">Alert intake</button><button id="t-demo" onclick="tab('demo')">Self demo</button></nav>
+  <div class="grow"></div>
+  <label class="small dim">Signed in as <select id="me" onchange="setMe(this.value)"></select></label>
+  <button onclick="document.body.classList.toggle('chaos')">⚡ Chaos</button>
+  <a id="tui" target="_blank">Temporal UI ↗</a>
 </header>
+<div id="chaosbar">
+  <b class="small" style="color:var(--bad)">Chaos panel</b><span class="small dim">for</span><input id="csecs" type="number" value="20"><span class="small dim">s:</span>
+  <button onclick="chaos('queue')">Queue down</button><button onclick="chaos('splunk')">Splunk down</button>
+  <button onclick="chaos('grok')">Grok 503</button><button onclick="chaos('grok', 429)">Grok 429 rate-limit</button>
+  <button onclick="chaos('soar')">SOAR down</button><button onclick="chaos('worker')">Kill worker</button>
+  <button onclick="chaos('sla')">Alert with 20s approval SLA</button>
+  <span class="grow"></span><span id="clog" class="small dim"></span>
+</div>
 
 <main id="cases" class="on">
   <section id="queue">
-    <div class="bar"><select id="newScenario"></select><button class="primary" onclick="newCase()">New case</button></div>
+    <div class="bar"><div class="seg"><button id="v-mine" class="on" onclick="setView('mine')">My cases</button><button id="v-all" onclick="setView('all')">All cases</button></div><span class="grow"></span><button class="primary" onclick="seed()">Seed 8 alerts</button></div>
+    <div class="filters"><select id="fstatus" onchange="loadQueue()"></select><select id="fwho" onchange="loadQueue()"></select></div>
     <div id="qrows"></div>
   </section>
-  <section id="detail"><p class="dim">Select a case, or start one.</p></section>
+  <section id="detail"><p class="dim">Seed some alerts, then pick a case.</p></section>
+  <section id="live"><div class="ptitle">Temporal event timeline · live from history <span id="lstatus"></span></div>
+    <div class="legend"><span><b class="k-workflow"></b>workflow</span><span><b class="k-activity"></b>activity</span><span><b class="k-retry"></b>failed → retry</span><span><b class="k-timer"></b>timer</span><span><b class="k-child"></b>child workflow</span><span><b style="background:#fff"></b>Update</span></div>
+    <div id="lrows"></div></section>
+</main>
+
+<main id="intake">
+  <div class="stats" id="istats"></div>
+  <div class="ipanes">
+    <section id="ilog"><div class="ptitle" style="padding-left:0">IntakeWorkflow · recent decisions (a Query)</div><div id="ilines"></div></section>
+    <section id="igantt"><div class="ptitle">alert-intake · current run's event history (latest 40)</div><div id="irows"></div></section>
+  </div>
 </main>
 
 <main id="demo">
@@ -89,6 +126,7 @@ main{display:none;height:calc(100vh - 57px)}main.on{display:flex}
 
 <div id="scrim" onclick="closeDrawer()"></div>
 <aside id="drawer"><header><b id="dtitle"></b><button class="x" onclick="closeDrawer()">×</button></header><div id="dbody"></div></aside>
+<div id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -97,9 +135,13 @@ const j = v => esc(JSON.stringify(v, null, 2));
 const hhmmss = iso => new Date(iso).toLocaleTimeString([], {hour12:false});
 const api = async (path, opts) => { const r = await fetch(path, opts); if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json(); };
 const post = (path, body) => api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
-let META, SRC = {}, current = null, demoId = null, paused = false;
+let META, SRC = {}, current = null, demoId = null, paused = false, view = 'mine';
+let ME = localStorage.getItem('me') || 'vihag';
+const BARS = {};  // gantt key -> bars, so a click can open the right drawer
 
-/* ---------- shared: drawer ---------- */
+function toast(msg){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t.timer); t.timer = setTimeout(() => t.style.display = 'none', 3500); }
+
+/* ---------- shared: drawer + gantt ---------- */
 function openDrawer(t, h){ $('dtitle').textContent = t; $('dbody').innerHTML = h; $('drawer').classList.add('on'); $('scrim').classList.add('on'); }
 function closeDrawer(){ $('drawer').classList.remove('on'); $('scrim').classList.remove('on'); }
 document.addEventListener('keydown', e => e.key === 'Escape' && closeDrawer());
@@ -110,17 +152,24 @@ function snippet(module, needle, before = 2, after = 10){
   return i < 0 ? '' : `<pre>${esc(lines.slice(Math.max(0, i - before), i + after).join('\n'))}</pre><p class="dim small">${module}.py · line ${i + 1}</p>`;
 }
 const WHY = {
-  llm_create: 'The model call is an Activity: Temporal records its result, retries it on failure or on an invalid answer (self-healing), and never re-calls it on replay.',
+  llm_create: 'The model call is an Activity: Temporal records its result, retries it on failure, rate limits (honouring Retry-After) or an invalid answer, and never re-calls it on replay.',
   run_tool: 'Each tool call the agent makes is its own Activity: retried with its own timeout, visible here, and skipped on replay once done.',
-  fetch_alert: 'Reading Splunk is I/O, so it is an Activity outside the deterministic Workflow sandbox.',
+  fetch_alert: 'Reading Splunk is I/O, so it is an Activity outside the deterministic Workflow sandbox. If Splunk is down it simply retries.',
   notify: 'Paging the analyst is an Activity; the Workflow then waits on a durable timer, not a thread.',
   soar_submit: 'Exactly-once side effect: Temporal retries until SOAR answers; SOAR is unique on case_id, so a retry after a lost response returns the same ticket.',
+  receive_alerts: 'Polling the queue is an Activity with unlimited retries: while the queue is down, alerts wait in it and nothing is lost.',
+  ack_alerts: 'Messages are deleted only after their case Workflow exists, so a crash between the two re-delivers them, and the duplicate start is a no-op.',
+};
+const KIND_WHY = {
+  workflow: 'One Workflow per alert (id case-{alert_id}). Its code is the whole case lifecycle; the event history is the source of truth.',
+  timer: 'A durable server-side timer (wait_condition timeout or workflow.sleep). No worker holds a thread while it waits; it survives restarts.',
+  update: 'An analyst action arrived as an Update. Its validator ran first (right analyst, right state); only accepted Updates are recorded in history.',
+  child: 'A child Workflow: its own id, history and retries. Case Workflows started by intake are ABANDONed so they outlive the intake loop; the ask agent returns its answer to the case.',
+  duplicate: 'Temporal refused to start a second Workflow with the same id (case-{alert_id}): the duplicate alert was a no-op.',
 };
 function barDrawer(b, wfId){
-  let h = `<p>${esc(WHY[b.name] || {workflow:'One Workflow per alert. Its code below is the whole case lifecycle; history is the source of truth.',
-    timer:'workflow.wait_condition(timeout=…) became a durable server-side timer. No worker holds a thread while it waits.' + (b.fired ? ' It fired: the case escalated.' : ' The analyst answered first, so it was cancelled.'),
-    update:'The analyst decision arrived as an Update. Its validator ran first (analyst only, only while a proposal is pending), then it was recorded in history.',
-    }[b.kind] || '')}</p>`;
+  let h = `<p>${esc(WHY[b.name] || KIND_WHY[b.kind] || '')}</p>`;
+  if (b.kind === 'timer') h += `<p>${b.fired ? 'It fired.' : b.end ? 'It was cancelled (something happened first).' : 'Still waiting.'}</p>`;
   if (b.attempt > 1) h += `<p><b style="color:var(--bad)">${b.attempt - 1} failed attempt(s)${b.retrying ? ', retrying now' : ''}.</b> Temporal retried with backoff per the RetryPolicy in <code>activities.OPTIONS</code>; the Workflow code never saw the failures.</p>`;
   h += `<p class="small dim">${b.start ? hhmmss(b.start) : ''} → ${b.end ? hhmmss(b.end) : 'running'}${b.attempt > 1 ? ` · attempt ${b.attempt}` : ''}</p>`;
   if (b.error) h += `<h4>Last error</h4><pre>${esc(b.error)}</pre>`;
@@ -128,53 +177,104 @@ function barDrawer(b, wfId){
   else if (b.input) h += `<h4>Input</h4><pre>${j(b.input)}</pre>`;
   if (b.result !== undefined) h += `<h4>Result${b.name === 'llm_create' ? ` (model: ${esc(b.result.model)})` : ''}</h4><pre>${j(b.result)}</pre>`;
   if (b.name) h += `<h4>Activity code</h4>` + snippet('activities', `async def ${b.name}(`, 1, 14);
-  if (b.kind === 'timer') h += `<h4>Workflow code</h4>` + snippet('workflow', 'await workflow.wait_condition(', 1, 8);
-  if (b.kind === 'update') h += `<h4>Workflow code</h4>` + snippet('workflow', '@workflow.update', 0, 18);
+  if (b.kind === 'timer') h += `<h4>Workflow code</h4>` + (snippet('workflow', 'await workflow.wait_condition(', 1, 8) || snippet('intake', 'workflow.sleep', 1, 2));
+  if (b.kind === 'update') h += `<h4>Workflow code</h4>` + snippet('workflow', `def ${b.label.split('(')[0]}(`, 1, 16);
+  if (b.kind === 'child' || b.kind === 'duplicate') h += b.child_id ? `<p><a href="#" onclick="openCase('${esc(b.child_id)}');tab('cases');closeDrawer();return false">${esc(b.child_id)}</a></p>` : '';
+  if (b.kind === 'duplicate' || (b.kind === 'child' && wfId === 'alert-intake')) h += `<h4>Intake code</h4>` + snippet('intake', 'start_child_workflow', 2, 12);
   openDrawer(b.label, h + `<p>${tuiLink(wfId)}</p>`);
 }
+function gantt(el, key, bars, h, wfId, last = 0){
+  if (last && bars.length > last) bars = [bars[0], ...bars.slice(-last)];
+  BARS[key] = bars;
+  const t0 = new Date(last ? bars[1]?.start || bars[0].start : bars[0].start), end = h.running ? new Date(h.now) : new Date(bars[0].end || h.now);
+  const span = Math.max(end - t0, 1000), pct = d => Math.min(100, Math.max(0, (new Date(d) - t0) / span * 100));
+  const seg = (kind, a, z, live) => { const l = pct(a), r = z ? pct(z) : 100;
+    return `<div class="gb k-${kind} ${live ? 'live' : ''}" style="left:${l}%;width:${Math.max(r - l, .4)}%"></div>`; };
+  $(el).innerHTML = bars.map((b, i) => {
+    const track = b.retrying ? seg('retry', b.start, null, true)
+      : b.failed_until ? seg('retry', b.start, b.failed_until) + seg(b.kind, b.failed_until, b.end, !b.end)
+      : seg(b.kind, b.start, b.end, !b.end);
+    return `<div class="grow-row" onclick="barDrawer(BARS['${key}'][${i}], '${esc(wfId)}')"><div class="glabel" title="${esc(b.error || b.label)}">${esc(b.label)}${b.attempt > 1 ? ` <span style="color:var(--bad)">· attempt ${b.attempt}</span>` : ''}</div>
+    <div class="track">${track}</div></div>`; }).join('');
+}
+
+/* ---------- top bar: analyst switcher, chaos ---------- */
+function tab(name){ ['cases', 'intake', 'demo'].forEach(n => { $(n).classList.toggle('on', n === name); $('t-' + n).classList.toggle('on', n === name); }); }
+function setMe(who){ ME = who; localStorage.setItem('me', who); loadQueue(); renderCase(); }
+function setView(v){ view = v; $('v-mine').classList.toggle('on', v === 'mine'); $('v-all').classList.toggle('on', v === 'all'); $('fwho').disabled = v === 'mine'; loadQueue(); }
+async function chaos(target, code = 503){
+  try { const r = await post('/api/chaos', {target, seconds: +$('csecs').value, code});
+    $('clog').textContent = `${new Date().toLocaleTimeString([], {hour12:false})} · ${r.message}`; toast('⚡ ' + r.message); }
+  catch (e) { toast(e.message); }
+}
+async function seed(){ const r = await post('/api/seed'); toast(`Pushed ${r.pushed} alerts onto the queue (one is a duplicate). Intake picks them up within 2s.`); }
 
 /* ---------- cases view ---------- */
-function tab(name){ ['cases','demo'].forEach(n => { $(n).classList.toggle('on', n === name); $('t-' + n).classList.toggle('on', n === name); }); }
+const STATUSES = ['ASSIGNED', 'TRIAGED', 'INVESTIGATING', 'DISPOSITION_PROPOSED', 'PARKED', 'ESCALATED', 'APPROVED', 'SUBMITTED', 'AUTO_RESOLVED', 'NEEDS_REVIEW'];
 async function loadQueue(){
-  const rows = await api('/api/cases');
+  let rows = await api('/api/cases');
+  const st = $('fstatus').value, who = view === 'mine' ? ME : $('fwho').value;
+  rows = rows.filter(r => (!st || (st === 'OPEN' ? !['SUBMITTED', 'AUTO_RESOLVED', 'NEEDS_REVIEW'].includes(r.status) : r.status === st)) && (!who || r.assignee === who));
   $('qrows').innerHTML = rows.map(r => `<div class="qrow ${r.id === current ? 'on' : ''}" onclick="openCase('${r.id}')">
-    <div><b>${esc(r.id)}</b> <span class="pill s-${r.status || ''}">${esc(r.status || r.run_status)}</span></div>
-    <div class="small dim">${esc(r.title || '')}</div><div class="small dim">${esc(r.severity || '')} · ${esc(r.host || '')} · ${hhmmss(r.started)}</div></div>`).join('') || '<p class="dim" style="padding:12px">No cases yet.</p>';
-}
-async function newCase(){
-  try { const r = await post('/api/cases', {scenario: $('newScenario').value}); await openCase(r.id); }
-  catch (e) { alert(e.message + ' (a case for this alert may already be open)'); }
+    <div><b>${esc(r.alert_id || r.id)}</b> <span class="pill s-${r.status || ''}">${esc(r.status || r.run_status)}</span> <span class="who">${esc(r.assignee || '')}</span></div>
+    <div class="small">${esc(r.title || '')}</div><div class="small dim">${esc(r.severity || '')} · ${esc(r.host || '')} · ${hhmmss(r.started)}${r.parked_until ? ' · parked until ' + hhmmss(r.parked_until) : ''}</div></div>`).join('')
+    || `<p class="dim" style="padding:12px">${view === 'mine' ? `No cases assigned to ${esc(ME)}.` : 'No cases yet: press Seed.'}</p>`;
 }
 async function openCase(id){ current = id; await renderCase(); loadQueue(); }
 let CASE = null, HIST = [];
 async function renderCase(){
   if (!current) return;
   const [c, h] = await Promise.all([api(`/api/cases/${current}`), api(`/api/cases/${current}/history`)]);
-  CASE = c; HIST = h.bars;
-  const a = c.alert || {};
-  let html = `<h2 style="margin:0 0 4px">${esc(a.title)}</h2><p class="dim">${esc(c.case_id)} · ${esc(a.host)} · ${esc(a.user)} · severity ${esc(a.severity)} · route ${esc(c.route || '-')} <span class="pill s-${c.status}">${c.status}</span></p>`;
+  CASE = c; HIST = h.bars; gantt('lrows', 'live', h.bars, h, current);
+  $('lstatus').innerHTML = h.running ? '' : '· <span class="dim">completed</span>';
+  if (busy()) return;  // never redraw under the analyst's cursor
+  const a = c.alert || {}, mine = c.assignee === ME, closed = ['SUBMITTED', 'AUTO_RESOLVED', 'NEEDS_REVIEW'].includes(c.status);
+  let html = `<h2 style="margin:0 0 4px">${esc(a.title)}</h2><p class="dim">${esc(c.case_id)} · ${esc(a.host)} · ${esc(a.user)} · severity ${esc(a.severity)} · route ${esc(c.route || '-')} <span class="pill s-${c.status}">${c.status}</span> · assigned to <span class="who">${esc(c.assignee)}</span>${c.parked_until ? ` · parked until ${hhmmss(c.parked_until)}` : ''}</p>`;
+  if (!closed) {
+    const others = META.roster.filter(r => r !== c.assignee).map(r => `<option>${r}</option>`).join('');
+    html += `<div class="card"><h3>Actions ${mine ? '' : `<span class="small" style="text-transform:none;color:var(--warn)">· you are ${esc(ME)}; ${esc(c.assignee)} owns this case (the Update validators will say no)</span>`}</h3><div class="actions">
+      ${c.status === 'PARKED' ? `<button onclick="act('unpark')">Unpark now</button>` : `<select id="parkFor"><option value="60">1 min</option><option value="300">5 min</option><option value="3600">1 hour</option></select><button onclick="act('park', {seconds: +$('parkFor').value, reason: 'waiting on info'})">Park</button>`}
+      <span class="sep"></span><select id="reTo">${others}</select><button onclick="act('reassign', {to_analyst: $('reTo').value, reason: 'handover'})">Reassign</button>
+      <span class="sep"></span><input id="q" size="34" placeholder="Ask the agent, e.g. any exemption tickets this week?"><button onclick="ask()">Ask agent</button>
+      <span class="why" onclick="barDrawer({kind:'update',label:'park(…)'}, current)">What Temporal does here</span></div></div>`;
+  }
   if (c.approval_pending) html += `<div class="card banner"><div class="grow"><b>Proposed: ${esc(c.disposition.action)}</b><div class="small dim">${esc(c.disposition.rationale)}</div></div>
     <input id="why" placeholder="Rationale" style="background:#0b0b14;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px">
-    <button class="good" onclick="decide('approve')">Approve</button><button class="bad" onclick="decide('reject')">Reject</button>
-    <span class="why" onclick="barDrawer({kind:'update',label:'decide (Update)'}, current)">What Temporal does here</span></div>`;
+    <button class="good" onclick="act('decide', {decision:'approve', rationale: $('why').value})">Approve</button><button class="bad" onclick="act('decide', {decision:'reject', rationale: $('why').value})">Reject</button>
+    <span class="why" onclick="barDrawer({kind:'update',label:'decide(…)'}, current)">What Temporal does here</span></div>`;
+  if (c.questions.length) html += `<div class="card"><h3>Questions to the agent</h3>${c.questions.map(q => `<div style="margin-bottom:8px"><b>${esc(q.analyst_id)}:</b> ${esc(q.question)}<br><span style="color:var(--accent2)">agent:</span> ${q.answer ? esc(q.answer) : '<span class="dim">working… (child Workflow ' + esc(q.workflow_id) + ')</span>'}</div>`).join('')}</div>`;
   html += `<div class="card"><h3>Timeline</h3><div class="tl">${c.timeline.map((t, i) => `<span class="dim mono">${hhmmss(t.at)}</span><span><span class="pill s-${t.status}">${t.status}</span></span><span>${esc(t.note)}</span><span class="why" onclick="stepDrawer(${i})">What Temporal did here</span>`).join('')}</div></div>`;
   if (c.findings.length) html += `<div class="card"><h3>Findings</h3>${c.findings.map((f, i) => `<div>[${i}] <b>${esc(f.agent)}</b> ${esc(f.statement)} <span class="dim small">cites ${f.evidence_refs.map(esc).join(', ')} · conf ${f.confidence}</span></div>`).join('')}</div>`;
   if (c.evidence.length) html += `<div class="card"><h3>Evidence</h3>${c.evidence.map(e => `<details><summary><b>${esc(e.ref)}</b> <span class="dim">${esc(e.source)} · ${esc(e.agent)}</span> ${esc(e.content.summary || '')}</summary><pre>${j(e.content)}</pre></details>`).join('')}</div>`;
-  if (c.soar) html += `<div class="card"><h3>SOAR</h3>${esc(c.soar.soar_id)} · ${c.soar.created ? 'filed' : 'already filed (retry was harmless)'}</div>`;
+  if (c.soar) html += `<div class="card"><h3>SOAR</h3>${esc(c.soar.soar_id)} · ${c.soar.created ? 'filed once' : 'already filed (the retry was harmless: exactly-once)'}</div>`;
   $('detail').innerHTML = html + `<p>${tuiLink(c.case_id)}</p>`;
 }
+const busy = () => ['why', 'q', 'parkFor', 'reTo'].includes(document.activeElement?.id) || $('drawer').classList.contains('on');
 function stepDrawer(i){
   const t = CASE.timeline, from = new Date(t[i].at), to = t[i + 1] ? new Date(t[i + 1].at) : new Date(8.64e15);
   const bars = HIST.filter(b => b.kind !== 'workflow' && new Date(b.start) >= new Date(from - 1500) && new Date(b.start) < to);
-  const rows = bars.map((b, k) => `<tr><td class="mono">${hhmmss(b.start)}</td><td><a href="#" onclick="barDrawer(HIST[${HIST.indexOf(b)}], current);return false">${esc(b.label)}</a></td><td>${b.kind}${b.attempt > 1 ? ' · attempt ' + b.attempt : ''}</td></tr>`).join('');
+  const rows = bars.map(b => `<tr><td class="mono">${hhmmss(b.start)}</td><td><a href="#" onclick="barDrawer(HIST[${HIST.indexOf(b)}], current);return false">${esc(b.label)}</a></td><td>${b.kind}${b.attempt > 1 ? ' · attempt ' + b.attempt : ''}</td></tr>`).join('');
   openDrawer(`${t[i].status}: what Temporal did here`,
     `<p>Everything the Workflow did between this step and the next, read from the real event history. Click a row for its inputs, outputs and code.</p>
      <table class="small" style="width:100%">${rows || '<tr><td class="dim">No Activities in this step (a pure state change in Workflow code).</td></tr>'}</table>
      <h4>Workflow code</h4>${snippet('workflow', `Status.${t[i].status}`, 3, 4)}<p>${tuiLink(current)}</p>`);
 }
-async function decide(decision){
-  try { await post(`/api/cases/${current}/decide`, {decision, rationale: $('why').value}); } catch (e) { alert('Rejected by the Update validator: ' + e.message); }
-  renderCase(); loadQueue();
+async function act(action, extra = {}){
+  try { await post(`/api/cases/${current}/${action}`, {analyst_id: ME, ...extra}); toast(`${action}: done`); }
+  catch (e) { toast(`${action} refused by the Update validator: ${e.message}`); }
+  document.activeElement?.blur(); renderCase(); loadQueue();
+}
+async function ask(){ const q = $('q').value.trim(); if (!q) return; await act('ask', {question: q}); toast('The agent is working as a child Workflow; its answer lands on the case.'); }
+
+/* ---------- intake view ---------- */
+async function loadIntake(){
+  const d = await api('/api/intake'), s = d.stats;
+  $('istats').innerHTML = [['Cases opened', s.started], ['Duplicates ignored', s.duplicates], ['Queue depth', d.queue_depth ?? '?'],
+    ['Queue', d.queue_down ? '<span style="color:var(--bad)">DOWN</span>' : '<span style="color:var(--ok)">up</span>'], ['Next analyst', META.roster[(s.next_analyst || 0) % META.roster.length]]]
+    .map(([k, v]) => `<div class="stat"><span class="small dim">${k}</span><b>${v ?? '-'}</b></div>`).join('');
+  $('ilines').innerHTML = (s.recent || []).map(l => { const [ts, ...rest] = l.split(' ');
+    return `<div class="small"><span class="mono dim">${hhmmss(ts)}</span> ${esc(rest.join(' '))}</div>`; }).join('') || '<p class="dim">Nothing yet: press Seed on the Cases tab.</p>';
+  const h = await api('/api/cases/alert-intake/history'); gantt('irows', 'intake', h.bars, h, 'alert-intake', 40);
 }
 
 /* ---------- self demo ---------- */
@@ -190,8 +290,8 @@ function setSteps(active, broke, done){
   $('st3').className = 'step ' + (done ? 'on' : '');
 }
 const HOT = {  // case status -> the line of workflow.py that is executing
-  NEW: 'TriageAgent(inp.scenario).run', TRIAGED: 'RoutingPolicy().decide', INVESTIGATING: 'await self._investigate(inp)',
-  DISPOSITION_PROPOSED: 'await workflow.wait_condition(', ESCALATED: 'Status.ESCALATED',
+  NEW: 'await call(fetch_alert', ASSIGNED: 'TriageAgent(inp.scenario).run', TRIAGED: 'RoutingPolicy().decide', INVESTIGATING: 'await self._investigate(inp)',
+  DISPOSITION_PROPOSED: 'await workflow.wait_condition(', ESCALATED: 'Status.ESCALATED', PARKED: 'timeout_summary="park timer"',
   REJECTED: 'Status.REJECTED', APPROVED: 'await call(soar_submit', SUBMITTED: 'Status.SUBMITTED', AUTO_RESOLVED: 'Status.AUTO_RESOLVED', NEEDS_REVIEW: 'Status.NEEDS_REVIEW',
 };
 function renderSource(status){
@@ -206,18 +306,8 @@ async function pollDemo(){
   try {
     const [c, h] = await Promise.all([api(`/api/cases/${demoId}`), api(`/api/cases/${demoId}/history`)]);
     if (c.status !== lastHot) { renderSource(c.status); lastHot = c.status; }
-    const bars = h.bars, t0 = new Date(bars[0].start), end = h.running ? new Date(h.now) : new Date(bars[0].end || h.now);
-    const span = Math.max(end - t0, 1000), pct = d => Math.min(100, Math.max(0, (new Date(d) - t0) / span * 100));
-    window.DEMO_BARS = bars;
-    const seg = (kind, a, z, live) => { const l = pct(a), r = z ? pct(z) : 100;
-      return `<div class="gb k-${kind} ${live ? 'live' : ''}" style="left:${l}%;width:${Math.max(r - l, .4)}%"></div>`; };
-    $('rows').innerHTML = bars.map((b, i) => {
-      const track = b.retrying ? seg('retry', b.start, null, true)
-        : b.failed_until ? seg('retry', b.start, b.failed_until) + seg(b.kind, b.failed_until, b.end, !b.end)
-        : seg(b.kind, b.start, b.end, !b.end);
-      return `<div class="grow-row" onclick="barDrawer(DEMO_BARS[${i}], demoId)"><div class="glabel" title="${esc(b.error || '')}">${esc(b.label)}${b.attempt > 1 ? ` <span style="color:var(--bad)">· attempt ${b.attempt}</span>` : ''}</div>
-      <div class="track">${track}</div></div>`; }).join('');
-    const broke = bars.some(b => b.attempt > 1 || b.kind === 'failed' || b.fired) || c.timeline.some(t => t.status === 'REJECTED' || t.status === 'ESCALATED') || c.approval_pending;
+    gantt('rows', 'demo', h.bars, h, demoId);
+    const broke = h.bars.some(b => b.attempt > 1 || b.kind === 'failed' || b.fired) || c.timeline.some(t => t.status === 'REJECTED' || t.status === 'ESCALATED') || c.approval_pending;
     setSteps(0, broke, !h.running);
     $('dstatus').innerHTML = `· <span class="pill s-${c.status}">${c.status}</span> ${h.running ? '' : '<span class="dim">(completed)</span>'}`;
   } catch (e) { /* the workflow may not exist for a moment after Start over */ }
@@ -225,16 +315,22 @@ async function pollDemo(){
 
 (async function boot(){
   META = await api('/api/meta');
-  [SRC.workflow, SRC.activities] = await Promise.all(['workflow', 'activities'].map(m => fetch('/api/source/' + m).then(r => r.text())));
+  [SRC.workflow, SRC.activities, SRC.intake] = await Promise.all(['workflow', 'activities', 'intake'].map(m => fetch('/api/source/' + m).then(r => r.text())));
   $('tui').href = META.temporal_ui;
+  $('me').innerHTML = META.roster.map(r => `<option ${r === ME ? 'selected' : ''}>${r}</option>`).join('');
+  $('fstatus').innerHTML = '<option value="">Any status</option><option value="OPEN">Open</option>' + STATUSES.map(s => `<option>${s}</option>`).join('');
+  $('fwho').innerHTML = '<option value="">Any assignee</option>' + META.roster.map(r => `<option>${r}</option>`).join(''); $('fwho').disabled = true;
   $('sim').innerHTML = META.simulations.map(s => `<option>${s.name}</option>`).join(''); showStory();
-  $('newScenario').innerHTML = ['hitl-confirm-01', 'auto-fp-01', 'triage-lowconf-01', 'hitl-flaky-01'].map(s => `<option>${s}</option>`).join('');
   renderSource('NEW'); loadQueue();
   const auto = location.hash.match(/^#demo=(\w+)/);  // e.g. /#demo=activity_failure_retry starts it
   if (auto) { tab('demo'); $('sim').value = auto[1]; showStory(); startDemo(); }
-  setInterval(pollDemo, 1000); setInterval(() => {  // refresh the case view, but never under the analyst's cursor
-    const busy = document.activeElement === $('why') || $('drawer').classList.contains('on');
-    if ($('cases').classList.contains('on') && !busy) { renderCase(); loadQueue(); } }, 3000);
+  const caseLink = location.hash.match(/^#case=([\w-]+)/); if (caseLink) { setView('all'); openCase(caseLink[1]); }
+  if (location.hash === '#intake') tab('intake');
+  if (location.hash.includes('chaos')) document.body.classList.add('chaos');
+  setInterval(pollDemo, 1000);
+  setInterval(() => { if ($('cases').classList.contains('on')) renderCase().catch(() => {}); }, 1000);
+  setInterval(() => { if ($('cases').classList.contains('on') && !busy()) loadQueue().catch(() => {}); }, 3000);
+  setInterval(() => { if ($('intake').classList.contains('on')) loadIntake().catch(() => {}); }, 1500);
 })();
 </script>
 </body>

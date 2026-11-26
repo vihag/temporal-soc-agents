@@ -12,6 +12,8 @@ import pytest_asyncio
 from temporalio.testing import WorkflowEnvironment
 
 from services.common import serve_in_thread
+from services.mock_grok import grok_server
+from services.mock_queue import queue_server
 from services.mock_soar import soar_server
 from services.mock_splunk import splunk_server
 from soc.settings import Settings
@@ -39,10 +41,26 @@ def splunk():
 
 
 @pytest.fixture(scope="session")
-def settings(soar, splunk) -> Settings:
+def grok():
+    server = serve_in_thread(grok_server(_free_port()))
+    yield server
+    server.shutdown()
+
+
+@pytest.fixture(scope="session")
+def queue():
+    server = serve_in_thread(queue_server(_free_port()))
+    yield server
+    server.shutdown()
+
+
+@pytest.fixture(scope="session")
+def settings(soar, splunk, grok, queue) -> Settings:
     mp = pytest.MonkeyPatch()
     mp.setenv("SOAR_URL", f"http://127.0.0.1:{soar.server_port}")
     mp.setenv("SPLUNK_URL", f"http://127.0.0.1:{splunk.server_port}")
+    mp.setenv("MOCK_GROK_URL", f"http://127.0.0.1:{grok.server_port}/v1")
+    mp.setenv("QUEUE_URL", f"http://127.0.0.1:{queue.server_port}")
     mp.setenv("GROK_CLIENT", "fixture")  # never a live model in tests
     mp.delenv("XAI_API_KEY", raising=False)
     yield replace(Settings.from_env(), task_queue=f"test-{uuid.uuid4()}")

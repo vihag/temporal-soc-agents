@@ -22,11 +22,13 @@ class Settings:
     max_agent_steps: int = 6
     soar_url: str = "http://127.0.0.1:8002"
     splunk_url: str = "http://127.0.0.1:8001"
+    mock_grok_url: str = "http://127.0.0.1:8003/v1"
+    queue_url: str = "http://127.0.0.1:8004"
     xai_api_key: str = ""
     xai_base_url: str = "https://api.x.ai/v1"
     xai_model: str = "grok-4.3"
     llm_max_tokens: int = 800
-    fixture_latency_s: float = 0.0  # fake model "thinking" time, so the UI demo is watchable
+    fixture_latency_s: float = 0.0  # Mock Grok "thinking" time, so the UI demo is watchable
     fixtures_dir: Path = REPO_ROOT / "fixtures" / "scenarios"
 
     @classmethod
@@ -40,6 +42,8 @@ class Settings:
             max_agent_steps=int(env("MAX_AGENT_STEPS", str(cls.max_agent_steps))),
             soar_url=env("SOAR_URL", cls.soar_url),
             splunk_url=env("SPLUNK_URL", cls.splunk_url),
+            mock_grok_url=env("MOCK_GROK_URL", cls.mock_grok_url),
+            queue_url=env("QUEUE_URL", cls.queue_url),
             xai_api_key=env("XAI_API_KEY", ""),
             xai_base_url=env("XAI_BASE_URL", cls.xai_base_url),
             xai_model=env("XAI_MODEL", cls.xai_model),

@@ -1,0 +1,29 @@
+{
+  "extends": "hitl-confirm-01",
+  "alert": {
+    "alert_id": "SPL-2026-0201", "title": "Impossible travel: VPN login from Singapore then Frankfurt in 9 minutes",
+    "severity": "medium", "host": "vpn-gw-02", "user": "m.tan", "privileged_account": false,
+    "raw": {"rule": "IDP-IMPOSSIBLE-TRAVEL", "geo": ["SG", "DE"]}
+  },
+  "tools": {
+    "list_alert_evidence": {"ref": "EV-alert", "summary": "Two successful SSO logins for m.tan, 9 minutes apart, 10,000 km apart"},
+    "search_evidence": {"ref": "EV-spl-1", "summary": "Frankfurt session used a residential proxy ASN; MFA push approved from the usual phone"},
+    "lookup_asset": {"ref": "EV-asset", "summary": "vpn-gw-02 is the APAC VPN concentrator"},
+    "enrich_ioc": {"ref": "EV-ioc", "summary": "Proxy ASN seen in 2 prior credential-stuffing waves"},
+    "lookup_mitre": {"ref": "EV-mitre", "summary": "T1078 Valid Accounts"}
+  },
+  "llm": {
+    "triage": [{"final": {"severity": "medium", "verdict": "suspicious", "confidence": 0.7,
+                          "rationale": "Impossible travel with MFA approved; could be a proxy or session theft."}}],
+    "evidence": [
+      {"tool": "search_evidence", "args": {"query": "user=m.tan sourcetype=sso"}},
+      {"final": {"findings": [{"statement": "Frankfurt session came through a residential proxy; MFA was approved", "evidence_refs": ["EV-spl-1"], "confidence": 0.7}]}}
+    ],
+    "threat": [
+      {"tool": "enrich_ioc", "args": {"indicator": "proxy-asn"}},
+      {"final": {"findings": [{"statement": "Proxy ASN linked to earlier credential stuffing", "evidence_refs": ["EV-ioc"], "confidence": 0.65}]}}
+    ],
+    "disposition": [{"final": {"action": "reset_credentials", "cited_findings": [0, 1],
+                               "rationale": "Likely session theft through a proxy: revoke sessions and reset m.tan's password."}}]
+  }
+}
