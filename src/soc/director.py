@@ -121,7 +121,7 @@ class Director:
     async def wait_list(self, a: dict[str, Any], n: int, total: int) -> None:
         """The case shows up in the queue filtered by status/assignee (a Visibility query)."""
         cid = self.case_id(a["case"])
-        params = {k: str(a[k]) for k in ("status", "assignee") if k in a}
+        params: dict[str, str] = {k: str(a[k]) for k in ("status", "assignee") if k in a}
         for _ in range(int(a.get("timeout", 30) * 2)):
             listing = (await self.http.get("/api/cases", params=params)).json()
             if any(row["id"] == cid for row in listing["rows"]):
