@@ -16,6 +16,7 @@ from temporalio.worker import Worker
 from soc import activities
 from soc.intake import IntakeWorkflow, ensure_intake
 from soc.settings import Settings, connect
+from soc.visibility import ensure_search_attributes
 from soc.workflow import AskAgentWorkflow, CaseInvestigationWorkflow
 
 WORKFLOWS = [CaseInvestigationWorkflow, AskAgentWorkflow, IntakeWorkflow]
@@ -65,7 +66,9 @@ class WorkerSupervisor:
 async def run_worker() -> None:
     settings = Settings.from_env()
     client = await connect()
-    await ensure_intake(client, settings.task_queue)
+    if settings.search_attributes:
+        await ensure_search_attributes(client)
+    await ensure_intake(client, settings.task_queue, settings.search_attributes)
     print(f"Worker polling task queue {settings.task_queue!r} (LLM: {settings.grok_client})")
     await build_worker(client, settings.task_queue).run()
 

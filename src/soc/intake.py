@@ -48,6 +48,7 @@ class IntakeWorkflow:
             assignee=assignee,
             alert_id=message.alert_id,
             approval_timeout_s=message.approval_timeout_s,
+            indexed=self.state.indexed,
         )
         try:
             await workflow.start_child_workflow(
@@ -76,11 +77,11 @@ class IntakeWorkflow:
         return self.state
 
 
-async def ensure_intake(client: Client, task_queue: str) -> None:
+async def ensure_intake(client: Client, task_queue: str, indexed: bool = False) -> None:
     """Start the intake loop unless it is already running (safe to call from every worker)."""
     await client.start_workflow(
         IntakeWorkflow.run,
-        IntakeState(),
+        IntakeState(indexed=indexed),
         id=INTAKE_ID,
         task_queue=task_queue,
         id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,

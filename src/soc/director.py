@@ -118,6 +118,16 @@ class Director:
             await asyncio.sleep(0.5)
         raise RunbookFailed(f"step {n}: {cid} never reached {want or a}")
 
+    async def wait_list(self, a: dict[str, Any], n: int, total: int) -> None:
+        """The case shows up in the queue filtered by status/assignee (a Visibility query)."""
+        cid, params = self.case_id(a["case"]), {k: a[k] for k in ("status", "assignee") if k in a}
+        for _ in range(int(a.get("timeout", 30) * 2)):
+            listing = (await self.http.get("/api/cases", params=params)).json()
+            if any(row["id"] == cid for row in listing["rows"]):
+                return
+            await asyncio.sleep(0.5)
+        raise RunbookFailed(f"step {n}: {cid} not in the queue for {params}")
+
     async def act(self, a: dict[str, Any], n: int, total: int) -> None:
         cid = self.case_id(a["case"])
         case = (await self.http.get(f"/api/cases/{cid}")).json()

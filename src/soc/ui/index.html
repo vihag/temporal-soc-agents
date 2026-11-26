@@ -94,7 +94,8 @@ body.chaos main{height:calc(100vh - 107px)}body.cap main{height:calc(100vh - 100
 <main id="cases" class="on">
   <section id="queue">
     <div class="bar"><div class="seg"><button id="v-mine" class="on" onclick="setView('mine')">My cases</button><button id="v-all" onclick="setView('all')">All cases</button></div><span class="grow"></span><button class="primary" onclick="seed()">Seed 8 alerts</button></div>
-    <div class="filters"><select id="fstatus" onchange="loadQueue()"></select><select id="fwho" onchange="loadQueue()"></select></div>
+    <div class="filters"><select id="fstatus" onchange="loadQueue()"></select><select id="fwho" onchange="loadQueue()"></select>
+      <div class="mono dim" id="vquery" title="The Visibility query behind this list (custom search attributes)" style="font-size:10px;width:100%"></div></div>
     <div id="qrows"></div>
   </section>
   <section id="detail"><p class="dim">Seed some alerts, then pick a case.</p></section>
@@ -214,12 +215,12 @@ async function seed(){ const r = await post('/api/seed'); toast(`Pushed ${r.push
 /* ---------- cases view ---------- */
 const STATUSES = ['ASSIGNED', 'TRIAGED', 'INVESTIGATING', 'DISPOSITION_PROPOSED', 'PARKED', 'ESCALATED', 'APPROVED', 'SUBMITTED', 'AUTO_RESOLVED', 'NEEDS_REVIEW'];
 async function loadQueue(){
-  let rows = await api('/api/cases');
-  const st = $('fstatus').value, who = view === 'mine' ? ME : $('fwho').value;
-  rows = rows.filter(r => (!st || (st === 'OPEN' ? !['SUBMITTED', 'AUTO_RESOLVED', 'NEEDS_REVIEW'].includes(r.status) : r.status === st)) && (!who || r.assignee === who));
-  $('qrows').innerHTML = rows.map(r => `<div class="qrow ${r.id === current ? 'on' : ''}" onclick="openCase('${r.id}')">
+  const who = view === 'mine' ? ME : $('fwho').value;
+  const d = await api(`/api/cases?status=${encodeURIComponent($('fstatus').value)}&assignee=${encodeURIComponent(who)}`);
+  $('vquery').textContent = d.query;
+  $('qrows').innerHTML = d.rows.map(r => `<div class="qrow ${r.id === current ? 'on' : ''}" onclick="openCase('${r.id}')">
     <div><b>${esc(r.alert_id || r.id)}</b> <span class="pill s-${r.status || ''}">${esc(r.status || r.run_status)}</span> <span class="who">${esc(r.assignee || '')}</span></div>
-    <div class="small">${esc(r.title || '')}</div><div class="small dim">${esc(r.severity || '')} · ${esc(r.host || '')} · ${hhmmss(r.started)}${r.parked_until ? ' · parked until ' + hhmmss(r.parked_until) : ''}</div></div>`).join('')
+    <div class="small">${esc(r.title || '')}</div><div class="small dim">${esc(r.severity || '')} · ${esc(r.host || '')} · ${r.started ? hhmmss(r.started) : ''}</div></div>`).join('')
     || `<p class="dim" style="padding:12px">${view === 'mine' ? `No cases assigned to ${esc(ME)}.` : 'No cases yet: press Seed.'}</p>`;
 }
 async function openCase(id){ current = id; await renderCase(); loadQueue(); }

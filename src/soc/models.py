@@ -42,6 +42,7 @@ class CaseInput:
     max_agent_steps: int = 6
     assignee: str = "vihag"
     alert_id: str = ""  # a queued alert's own ID; empty = the recorded scenario's
+    indexed: bool = False  # upsert search attributes (needs them registered; see visibility.py)
 
 
 @dataclass
@@ -166,6 +167,7 @@ class IntakeState:
     recent: list[str] = field(default_factory=list)
     polls_per_run: int = 100
     poll_interval_s: float = 2.0
+    indexed: bool = False  # open cases with search attributes on
 
 
 @dataclass

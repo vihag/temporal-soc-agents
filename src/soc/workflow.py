@@ -43,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
         Status,
         TimelineEntry,
     )
+    from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY
 
 MAX_REWORK = 2  # an analyst may reject (and send back for re-investigation) at most twice
 CLOSED = (Status.SUBMITTED, Status.AUTO_RESOLVED, Status.NEEDS_REVIEW)
@@ -68,6 +69,8 @@ class CaseInvestigationWorkflow:
         case = self.case
         case.case_id = workflow.info().workflow_id
         case.alert = await call(fetch_alert, inp)
+        if inp.indexed:  # display fields for the Visibility list (no Query needed)
+            workflow.upsert_memo({"title": case.alert.title, "host": case.alert.host})
         self._enter(Status.NEW, f"Alert {case.alert.alert_id}: {case.alert.title}")
         case.assignee = inp.assignee
         self._enter(Status.ASSIGNED, f"Assigned to {inp.assignee}")
@@ -167,7 +170,17 @@ class CaseInvestigationWorkflow:
     def _enter(self, status: Status, note: str) -> Case:
         """The one place status changes. Also appends the timeline the UI and CLI show."""
         self.case.status = status
+        self._index()
         return self._note(note)
+
+    def _index(self) -> None:
+        """Keep the search attributes the case queue filters on in step with the case."""
+        if not self.inp.indexed:
+            return
+        updates = [CASE_STATUS.value_set(self.case.status), ASSIGNEE.value_set(self.case.assignee)]
+        if self.case.alert:
+            updates.append(SEVERITY.value_set(self.case.alert.severity))
+        workflow.upsert_search_attributes(updates)
 
     def _note(self, note: str) -> Case:
         """A timeline entry without a status change (reassign, questions)."""
@@ -208,6 +221,7 @@ class CaseInvestigationWorkflow:
     def reassign(self, request: ReassignRequest) -> Case:
         """Hand the case to another analyst. Nothing restarts: same step, same timeline."""
         previous, self.case.assignee = self.case.assignee, request.to_analyst
+        self._index()
         return self._note(
             f"Reassigned {previous} -> {request.to_analyst} by {request.by}: {request.reason}"
         )

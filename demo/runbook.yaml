@@ -1,8 +1,8 @@
 # The presenter runbook (DEMO.md) as data. `soc demo run` plays it against a running console
 # (captions appear as a banner in the UI); `soc demo run --fast` is the end-to-end test in CI.
 # Cases are referred to by alert suffix: "1003" means case-{run prefix}-1003.
-# Verbs: caption, pause, seed, alert, chaos, wait_until, act, assert_case, assert_history,
-# assert_intake. Analysts: @assignee, @other, @next (next on the roster).
+# Verbs: caption, pause, seed, alert, chaos, wait_until, wait_list (Visibility), act,
+# assert_case, assert_history, assert_intake. Analysts: @assignee, @other, @next (next on the roster).
 name: SOC console tour
 steps:
   - caption: {text: "Alerts land on an SQS-like queue. IntakeWorkflow turns each one into a case Workflow with id case-{alert_id}."}
@@ -45,9 +45,10 @@ steps:
   - assert_history: {case: "1006", kind: update, label: reassign}
   - caption: {text: "The new analyst sees the full timeline and continues at the same step."}
 
-  - caption: {text: "Park: a durable timer. The approval SLA does not run while the case is parked."}
+  - caption: {text: "Park: a durable timer. The approval SLA does not run while the case is parked. The queue filter 'PARKED' is a Visibility query on the CaseStatus search attribute."}
   - act: {case: "1003", action: park, seconds: 300, reason: "waiting on HR"}
   - wait_until: {case: "1003", status: PARKED}
+  - wait_list: {case: "1003", status: PARKED}
   - assert_history: {case: "1003", kind: timer, label: park timer}
 
   - caption: {text: "Ask an agent: the Update starts a child Workflow that loops over tools, incl. exemption tickets."}

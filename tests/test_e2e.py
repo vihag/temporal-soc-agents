@@ -16,6 +16,7 @@ from soc import api
 from soc.director import Director
 from soc.intake import ensure_intake
 from soc.settings import Settings
+from soc.visibility import ensure_search_attributes
 from soc.worker import WorkerSupervisor
 
 ROOT = Path(__file__).parents[1]
@@ -34,7 +35,8 @@ async def test_presenter_runbook_end_to_end(settings):
         task_queue = Settings.from_env().task_queue
         api._client, api._supervisor = env.client, WorkerSupervisor(env.client, task_queue)
         api._supervisor.start()
-        await ensure_intake(env.client, task_queue)
+        await ensure_search_attributes(env.client)
+        await ensure_intake(env.client, task_queue, indexed=True)
         port = _free_port()
         server = uvicorn.Server(uvicorn.Config(api.app, port=port, log_level="warning"))
         serving = asyncio.create_task(server.serve())

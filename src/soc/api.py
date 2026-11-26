@@ -37,6 +37,7 @@ from soc.models import (
 from soc.scenarios import Scenario
 from soc.settings import Settings, connect
 from soc.simulate import SIMULATIONS, Narrator, run_simulation
+from soc.visibility import ASSIGNEE, CASE_STATUS, SEVERITY, case_query, ensure_search_attributes
 from soc.worker import WorkerSupervisor
 from soc.workflow import CaseInvestigationWorkflow
 
@@ -118,31 +119,49 @@ async def source(module: str) -> str:
 
 
 @app.get("/api/cases")
-async def list_cases() -> list[dict[str, Any]]:
+async def list_cases(status: str = "", assignee: str = "") -> dict[str, Any]:
+    """The case queue: one Visibility list query on the case search attributes."""
     c = await client()
-    rows: list[dict[str, Any]] = []
-    async for wf in c.list_workflows('WorkflowType="CaseInvestigationWorkflow"', limit=60):
+    if not Settings.from_env().search_attributes:  # fallback: Query every recent case
+        return {"query": "(search attributes off: one Query per case)", "rows": await _queried(c)}
+    query, rows = case_query(status, assignee), list[dict[str, Any]]()
+    async for wf in c.list_workflows(query, limit=100):
         if any(r["id"] == wf.id for r in rows):
             continue  # newest run first; older runs of a re-used case ID live in the Temporal UI
+        sa, memo = wf.typed_search_attributes, await wf.memo()
         rows.append(
             {
                 "id": wf.id,
+                "alert_id": wf.id.removeprefix("case-"),
                 "run_status": wf.status.name if wf.status else "",
                 "started": wf.start_time.isoformat(),
+                "status": sa.get(CASE_STATUS) or "",
+                "assignee": sa.get(ASSIGNEE) or "",
+                "severity": sa.get(SEVERITY) or "",
+                "title": memo.get("title", ""),
+                "host": memo.get("host", ""),
             }
         )
+    return {"query": query, "rows": rows}
+
+
+async def _queried(c: Client) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    async for wf in c.list_workflows('WorkflowType="CaseInvestigationWorkflow"', limit=60):
+        if not any(r["id"] == wf.id for r in rows):
+            rows.append({"id": wf.id, "run_status": wf.status.name if wf.status else ""})
     cases = await asyncio.gather(*(_query(c, r["id"]) for r in rows), return_exceptions=True)
     for row, case in zip(rows, cases, strict=True):
         if isinstance(case, dict):
             alert = case["alert"] or {}
             row |= {
                 "status": case["status"],
+                "assignee": case["assignee"],
+                "alert_id": alert.get("alert_id", ""),
                 "title": alert.get("title", ""),
                 "severity": alert.get("severity", ""),
                 "host": alert.get("host", ""),
-                "assignee": case["assignee"],
-                "parked_until": case["parked_until"],
-                "alert_id": alert.get("alert_id", ""),
+                "started": case["timeline"][0]["at"] if case["timeline"] else "",
             }
     return rows
 
@@ -156,7 +175,11 @@ async def start_case(body: StartBody) -> dict[str, str]:
     settings, c = Settings.from_env(), await client()
     alert_id = Scenario.load(body.scenario, settings.fixtures_dir).alert["alert_id"]
     inp = CaseInput(
-        body.scenario, settings.enable_threat, settings.approval_timeout_s, settings.max_agent_steps
+        body.scenario,
+        settings.enable_threat,
+        settings.approval_timeout_s,
+        settings.max_agent_steps,
+        indexed=settings.search_attributes,
     )
     handle = await c.start_workflow(
         CaseInvestigationWorkflow.run, inp, id=f"case-{alert_id}", task_queue=settings.task_queue
@@ -474,7 +497,9 @@ def serve(with_worker: bool) -> None:
         global _supervisor
         _supervisor = WorkerSupervisor(await client(), settings.task_queue)
         _supervisor.start()
-        await ensure_intake(await client(), settings.task_queue)
+        if settings.search_attributes:
+            await ensure_search_attributes(await client())
+        await ensure_intake(await client(), settings.task_queue, settings.search_attributes)
         try:
             await server.serve()
         finally:

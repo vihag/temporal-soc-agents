@@ -1,7 +1,7 @@
-"""Workflow versioning: histories (file name = workflow id) recorded by the *previous* release must still replay on the
-current code. These JSON files were captured from main before the v3 changes, so a change that
-would break in-flight cases (a new command without `workflow.patched`) fails here, in CI, before
-it reaches a worker."""
+"""Workflow versioning: histories recorded by the *previous* release must still replay on the
+current code. The JSON files (file name = workflow id) were captured from main before the v3
+changes, so a change that would break in-flight cases (a new command without
+`workflow.patched`) fails here, in CI, before it reaches a worker."""
 
 from __future__ import annotations
 
