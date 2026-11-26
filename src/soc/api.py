@@ -46,6 +46,7 @@ _client: Client | None = None
 _supervisor: WorkerSupervisor | None = None  # set when the worker runs in this process
 _demo_tasks: dict[str, asyncio.Task[Any]] = {}
 _chaos_tasks: set[asyncio.Task[Any]] = set()
+_caption: dict[str, Any] = {}  # the demo director's current caption (display only)
 
 
 async def client() -> Client:
@@ -68,6 +69,22 @@ class ActionBody(BaseModel):
     reason: str = ""
     seconds: int = 0
     question: str = ""
+
+
+class SeedBody(BaseModel):
+    prefix: str = "SPL-2026"
+
+
+class AlertBody(BaseModel):
+    alert_id: str
+    scenario: str = "hitl-confirm-01"
+    approval_timeout_s: int = 120
+
+
+class CaptionBody(BaseModel):
+    text: str = ""
+    step: int = 0
+    total: int = 0
 
 
 class ChaosBody(BaseModel):
@@ -150,7 +167,10 @@ async def start_case(body: StartBody) -> dict[str, str]:
 @app.get("/api/cases/{wf_id}")
 async def get_case(wf_id: str) -> dict[str, Any]:
     handle = (await client()).get_workflow_handle(wf_id)
-    case = asdict(await handle.query(CaseInvestigationWorkflow.get_case))
+    try:
+        case = asdict(await handle.query(CaseInvestigationWorkflow.get_case))
+    except RPCError as err:  # not opened yet (or no such case)
+        raise HTTPException(404, err.message) from err
     pending = await handle.query(CaseInvestigationWorkflow.approval_pending)
     return case | {"approval_pending": pending.pending}
 
@@ -212,8 +232,27 @@ async def intake_stats() -> dict[str, Any]:
 
 
 @app.post("/api/seed")
-async def seed() -> dict[str, int]:
-    return {"pushed": await Chaos(Settings.from_env()).seed()}
+async def seed(body: SeedBody | None = None) -> dict[str, int]:
+    return {"pushed": await Chaos(Settings.from_env()).seed((body or SeedBody()).prefix)}
+
+
+@app.post("/api/alerts")
+async def push_alert(body: AlertBody) -> dict[str, str]:
+    """Put one alert on the queue (what a SIEM would do). Intake opens case-{alert_id}."""
+    await Chaos(Settings.from_env()).push(body.alert_id, body.scenario, body.approval_timeout_s)
+    return {"case_id": f"case-{body.alert_id}"}
+
+
+@app.post("/api/caption")
+async def set_caption(body: CaptionBody) -> dict[str, Any]:
+    """The demo director narrates here; the console shows it as a banner."""
+    _caption.update(body.model_dump(), at=datetime.now().astimezone().isoformat())
+    return _caption
+
+
+@app.get("/api/caption")
+async def get_caption() -> dict[str, Any]:
+    return _caption
 
 
 @app.post("/api/chaos")

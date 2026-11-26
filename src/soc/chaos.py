@@ -10,16 +10,17 @@ import httpx
 
 from soc.settings import Settings
 
-# Eight alerts for the runbook. The last repeats the first: intake will show it as a duplicate.
+# Eight alerts for the runbook (alert id = f"{prefix}-{suffix}"). The last repeats the first:
+# intake will show it as a duplicate.
 SEED = [
-    ("SPL-2026-1001", "hitl-confirm-01"),  # credential dumping -> investigate -> approve
-    ("SPL-2026-1002", "auto-fp-01"),  # benign automation -> auto-resolved
-    ("SPL-2026-1003", "travel-01"),  # impossible travel -> ask agent about exemptions
-    ("SPL-2026-1004", "hitl-flaky-01"),  # flaky Splunk + lost SOAR reply -> retries
-    ("SPL-2026-1005", "triage-lowconf-01"),  # model unsure -> needs review
-    ("SPL-2026-1006", "usb-01"),  # USB exfiltration -> reassign / park
-    ("SPL-2026-1007", "auto-fp-01"),  # benign automation -> auto-resolved
-    ("SPL-2026-1001", "hitl-confirm-01"),  # duplicate of the first alert -> no-op
+    ("1001", "hitl-confirm-01"),  # credential dumping -> investigate -> approve
+    ("1002", "auto-fp-01"),  # benign automation -> auto-resolved
+    ("1003", "travel-01"),  # impossible travel -> ask agent about exemptions
+    ("1004", "hitl-flaky-01"),  # flaky Splunk + lost SOAR reply -> retries, one ticket
+    ("1005", "triage-lowconf-01"),  # model unsure -> needs review
+    ("1006", "usb-01"),  # USB exfiltration -> reassign / park
+    ("1007", "auto-fp-01"),  # benign automation -> auto-resolved
+    ("1001", "hitl-confirm-01"),  # duplicate of the first alert -> no-op
 ]
 
 
@@ -51,9 +52,9 @@ class Chaos:
         async with httpx.AsyncClient(timeout=5) as http:
             (await http.post(f"{self.queue_url}/v1/send", json=body)).raise_for_status()
 
-    async def seed(self) -> int:
-        for alert_id, scenario in SEED:
-            await self.push(alert_id, scenario)
+    async def seed(self, prefix: str = "SPL-2026") -> int:
+        for suffix, scenario in SEED:
+            await self.push(f"{prefix}-{suffix}", scenario)
         return len(SEED)
 
     async def sla_breach(self, alert_id: str) -> None:

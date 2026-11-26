@@ -10,6 +10,7 @@
     python -m soc park case-SPL-2026-1006 120 --analyst aisha
     python -m soc ask case-SPL-2026-1003 "exemption tickets this week for this user?"
     python -m soc simulate --all      # five narrated self-driving scenarios
+    python -m soc demo run [--fast]   # play demo/runbook.yaml against the console (--fast: e2e)
     python -m soc grok-smoke          # one live Grok call; exits 2 if XAI_API_KEY is unset
 
 The CLI talks to Temporal directly (start, Query, Update); it never holds case state itself.
@@ -142,7 +143,7 @@ async def chaos(target: str, seconds: float) -> None:
 
 
 async def seed() -> None:
-    count = await Chaos(Settings.from_env()).seed()
+    count = await Chaos(Settings.from_env()).seed()  # SPL-2026-1001 ... 1007
     print(f"Pushed {count} alerts onto the queue (the last one duplicates the first).")
 
 
@@ -178,6 +179,11 @@ def main() -> None:
     c = sub.add_parser("chaos")
     c.add_argument("target", choices=["queue", "splunk", "grok", "grok429", "soar"])
     c.add_argument("seconds", type=float)
+    dr = sub.add_parser("demo")
+    dr.add_argument("action", choices=["run"])
+    dr.add_argument("--fast", action="store_true", help="no presenter pauses (the e2e test)")
+    dr.add_argument("--runbook", default="demo/runbook.yaml")
+    dr.add_argument("--api", default="http://127.0.0.1:8080")
     s = sub.add_parser("simulate")
     s.add_argument("names", nargs="*", help="any of: " + ", ".join(SIMULATIONS))
     s.add_argument("--all", action="store_true")
@@ -214,5 +220,10 @@ def main() -> None:
             asyncio.run(update(args.workflow_id, "unpark", args.analyst))
         case "ask":
             asyncio.run(update(args.workflow_id, "ask", AskRequest(args.question, args.analyst)))
+        case "demo":
+            from soc.director import Director
+
+            director = Director(args.api, fast=args.fast)
+            asyncio.run(director.run(Director.load(args.runbook)))
         case "simulate":
             asyncio.run(simulate(list(SIMULATIONS) if args.all or not args.names else args.names))
