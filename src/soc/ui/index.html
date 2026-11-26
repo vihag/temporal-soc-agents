@@ -106,6 +106,7 @@ body.chaos main{height:calc(100vh - 107px)}body.cap main{height:calc(100vh - 100
 
 <main id="intake">
   <div class="stats" id="istats"></div>
+  <div class="stat" id="ireport" style="margin:0 20px 10px"></div>
   <div class="ipanes">
     <section id="ilog"><div class="ptitle" style="padding-left:0">IntakeWorkflow · recent decisions (a Query)</div><div id="ilines"></div></section>
     <section id="igantt"><div class="ptitle">alert-intake · case starts, duplicates, retries and the latest polls (this run's history)</div><div id="irows"></div></section>
@@ -280,6 +281,15 @@ async function loadIntake(){
   const h = await api('/api/cases/alert-intake/history'), [wf, ...rest] = h.bars;
   const keep = rest.filter((b, i) => b.kind !== 'activity' && b.kind !== 'timer' || b.attempt > 1 || b.name === 'ack_alerts' || i >= rest.length - 8);
   gantt('irows', 'intake', [wf, ...keep.slice(-40)], h, 'alert-intake', 40);
+  loadReport().catch(() => {});
+}
+async function loadReport(){  // the shift report: a Temporal Schedule (durable cron)
+  const r = await api('/api/report'), l = r.latest;
+  const counts = l ? Object.entries(l.by_status).map(([k, v]) => `${k} ${v}`).join(' · ') : 'no run yet';
+  const load = l ? Object.entries(l.open_by_assignee).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none' : '-';
+  $('ireport').innerHTML = `<span class="small dim">Shift report · Schedule <span class="mono">${r.schedule_id}</span> every ${r.every_h}h · ${r.runs} runs · next ${r.next[0] ? hhmmss(r.next[0]) : '-'}</span>
+    <button onclick="post('/api/report').then(() => toast('Triggered the schedule: a ShiftReportWorkflow is running'))" style="float:right">Run now</button>
+    <div>${esc(counts)}</div><div class="small">Open by analyst: ${esc(load)}${l ? ' · at ' + hhmmss(l.at) : ''}</div>`;
 }
 
 /* ---------- demo director captions (soc demo run) ---------- */
